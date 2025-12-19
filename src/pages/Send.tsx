@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, SendParams } from "../lib/tauri";
 import { toast } from "sonner";
+import { useWalletStore } from "../state/walletStore";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import {
@@ -16,28 +18,66 @@ import {
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 
+type ProgressStep = "idle" | "preparing" | "proving" | "broadcasting" | "done" | "error";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export default function SendPage() {
   const qc = useQueryClient();
+  const setSyncStatus = useWalletStore((s) => s.setSyncStatus);
 
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
   const [memo, setMemo] = useState("");
   const [proverTip, setProverTip] = useState<SendParams["proverTip"]>("medium");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [progress, setProgress] = useState<ProgressStep>("idle");
 
   const sendMutation = useMutation({
-    mutationFn: (params: SendParams) => api.sendTransaction(params),
+    mutationFn: async (params: SendParams) => {
+      setProgress("preparing");
+      setSyncStatus("syncing", "Preparing...");
+      await sleep(150);
+
+      setProgress("proving");
+      setSyncStatus("syncing", "Generating proof...");
+      const res = await api.sendTransaction(params);
+
+      setProgress("broadcasting");
+      setSyncStatus("syncing", "Broadcasting...");
+      await sleep(150);
+      return res;
+    },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["balance"] });
       await qc.invalidateQueries({ queryKey: ["transactions"] });
       toast.success("Transaction submitted");
+      setProgress("done");
+      setSyncStatus("idle", null);
     },
     onError: (e) => {
       toast.error(e instanceof Error ? e.message : "Failed to send");
+      setProgress("error");
+      setSyncStatus("error", "Send failed");
+    },
+    onSettled: () => {
+      window.setTimeout(() => {
+        setProgress((p) => (p === "broadcasting" || p === "proving" || p === "preparing" ? "idle" : p));
+      }, 0);
     },
   });
 
   const canSubmit = Boolean(to && amount && !sendMutation.isPending);
+
+  const progressLabel: Record<Exclude<ProgressStep, "idle">, string> = {
+    preparing: "Preparing",
+    proving: "Generating proof",
+    broadcasting: "Broadcasting",
+    done: "Submitted",
+    error: "Failed",
+  };
 
   return (
     <div className="space-y-6">
@@ -146,6 +186,7 @@ export default function SendPage() {
                     </Button>
                     <Button
                       onClick={() => {
+                        setProgress("idle");
                         sendMutation.mutate({
                           to,
                           amount,
@@ -162,6 +203,32 @@ export default function SendPage() {
                 </DialogContent>
               </Dialog>
             </div>
+
+            {progress !== "idle" ? (
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <div className="text-muted-foreground">Progress</div>
+                  <Badge
+                    variant={
+                      progress === "error" ? "destructive" : progress === "done" ? "default" : "secondary"
+                    }
+                  >
+                    {progressLabel[progress]}
+                  </Badge>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                  <div className={progress === "preparing" ? "font-medium" : "text-muted-foreground"}>
+                    Preparing
+                  </div>
+                  <div className={progress === "proving" ? "font-medium" : "text-muted-foreground"}>
+                    Proving
+                  </div>
+                  <div className={progress === "broadcasting" ? "font-medium" : "text-muted-foreground"}>
+                    Broadcasting
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {sendMutation.data ? (
               <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
