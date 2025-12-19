@@ -960,6 +960,8 @@ pub async fn mint_dev_faucet(
     );
     let output_commitment = output_note.commitment();
     let output_commitment_bytes = fr_to_bytes(&output_commitment);
+    let output_commitment_hex = hex::encode(output_commitment_bytes);
+    let fingerprint_hex = hex::encode(to_fvk.fingerprint());
 
     // Assume mint inserts at index 0 for dev testnet flows (fresh chain).
     let mut empty_roots = Vec::with_capacity(MERKLE_TREE_DEPTH + 1);
@@ -1056,13 +1058,13 @@ pub async fn mint_dev_faucet(
     // Wait for helper-service to index the minted commitment before scanning.
     // Otherwise scan_notes may return no notes and the UI won't show updated balance.
     {
-        use tokio::time::{sleep, Duration, Instant};
+        use std::time::{Duration, Instant};
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let resp = http
                 .post(&helper_url)
-                .json(&HelperRequest::GetNoteByCommitment {
-                    commitment: output_commitment_hex.clone(),
+                .json(&HelperRequest::GetMemosByFingerprint {
+                    fingerprint: fingerprint_hex.clone(),
                 })
                 .send()
                 .await;
@@ -1070,8 +1072,8 @@ pub async fn mint_dev_faucet(
             if let Ok(r) = resp {
                 if let Ok(parsed) = r.json::<HelperResponse>().await {
                     match parsed {
-                        HelperResponse::GetNoteResult { note } => {
-                            if note.is_some() {
+                        HelperResponse::GetMemosByFingerprintResult { notes } => {
+                            if notes.iter().any(|n| n.commitment == output_commitment_hex) {
                                 break;
                             }
                         }
@@ -1089,7 +1091,7 @@ pub async fn mint_dev_faucet(
                     output_commitment_hex
                 ));
             }
-            sleep(Duration::from_secs(2)).await;
+            tauri::async_runtime::sleep(Duration::from_secs(2)).await;
         }
     }
 
