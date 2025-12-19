@@ -22,6 +22,7 @@ export default function SettingsPage() {
   const setHelperServiceUrl = useWalletStore((s) => s.setHelperServiceUrl);
   const theme = useWalletStore((s) => s.theme);
   const setTheme = useWalletStore((s) => s.setTheme);
+  const setSyncStatus = useWalletStore((s) => s.setSyncStatus);
 
   const [url, setUrl] = useState(helperServiceUrl);
   const [rescanOpen, setRescanOpen] = useState(false);
@@ -109,12 +110,15 @@ export default function SettingsPage() {
                 <Button
                   onClick={async () => {
                     try {
+                      setSyncStatus("syncing", "Rescanning...");
                       setRescanRunning(true);
                       await api.rescan();
                       toast.success("Rescan completed");
+                      setSyncStatus("idle", null);
                       setRescanOpen(false);
                     } catch {
                       toast.error("Rescan failed");
+                      setSyncStatus("error", "Rescan failed");
                     } finally {
                       setRescanRunning(false);
                     }

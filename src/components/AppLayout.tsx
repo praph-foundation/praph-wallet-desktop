@@ -28,6 +28,8 @@ export default function AppLayout() {
   const location = useLocation();
   const lockState = useWalletStore((s) => s.lockState);
   const lock = useWalletStore((s) => s.lock);
+  const syncStatus = useWalletStore((s) => s.syncStatus);
+  const syncMessage = useWalletStore((s) => s.syncMessage);
 
   function pageTitle(): string {
     const p = location.pathname;
@@ -87,10 +89,24 @@ export default function AppLayout() {
             <header className="mb-6 flex items-center justify-between">
               <div>
                 <div className="text-xl font-semibold">{pageTitle()}</div>
-                <div className="mt-1 text-xs text-muted-foreground">Sync: idle</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Sync: {syncStatus}
+                  {syncMessage ? ` · ${syncMessage}` : ""}
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
+                <Badge
+                  variant={
+                    syncStatus === "idle"
+                      ? "secondary"
+                      : syncStatus === "syncing"
+                        ? "default"
+                        : "destructive"
+                  }
+                >
+                  {syncStatus}
+                </Badge>
                 <Badge variant={lockState === "locked" ? "secondary" : "default"}>
                   {lockState}
                 </Badge>

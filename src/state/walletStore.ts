@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 export type WalletLockState = "locked" | "unlocked";
 export type ThemeMode = "light" | "dark";
+export type SyncStatus = "idle" | "syncing" | "error";
 
 const THEME_STORAGE_KEY = "praph_wallet_theme";
 
@@ -21,6 +22,8 @@ interface WalletState {
   lockState: WalletLockState;
   helperServiceUrl: string;
   theme: ThemeMode;
+  syncStatus: SyncStatus;
+  syncMessage: string | null;
 
   setHasWallet: (hasWallet: boolean) => void;
   lock: () => void;
@@ -28,6 +31,7 @@ interface WalletState {
   setHelperServiceUrl: (url: string) => void;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
+  setSyncStatus: (status: SyncStatus, message?: string | null) => void;
 }
 
 export const useWalletStore = create<WalletState>((set) => ({
@@ -35,6 +39,8 @@ export const useWalletStore = create<WalletState>((set) => ({
   lockState: "locked",
   helperServiceUrl: "http://localhost:8080",
   theme: loadTheme(),
+  syncStatus: "idle",
+  syncMessage: null,
 
   setHasWallet: (hasWallet) => set({ hasWallet }),
   lock: () => set({ lockState: "locked" }),
@@ -50,4 +56,6 @@ export const useWalletStore = create<WalletState>((set) => ({
       persistTheme(theme);
       return { theme };
     }),
+
+  setSyncStatus: (syncStatus, message = null) => set({ syncStatus, syncMessage: message }),
 }));
