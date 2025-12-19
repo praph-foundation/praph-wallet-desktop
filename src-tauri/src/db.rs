@@ -97,46 +97,8 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
         }
     }
 
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
-    if count == 0 {
-        let now = crate::unix_ts() as i64;
-        let demo1_amount_minor = parse_amount_minor("5.0000 PRAF");
-        let demo2_amount_minor = parse_amount_minor("1.5000 PRAF");
-        conn.execute(
-            "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status)\
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                "tx_demo_1",
-                "incoming",
-                "5.0000 PRAF",
-                demo1_amount_minor,
-                "0.0000 PRAF",
-                0i64,
-                "Demo incoming",
-                now - 3600,
-                "confirmed"
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status)\
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                "tx_demo_2",
-                "outgoing",
-                "1.5000 PRAF",
-                demo2_amount_minor,
-                "0.0100 PRAF",
-                parse_amount_minor("0.0100 PRAF"),
-                "Demo outgoing",
-                now - 900,
-                "pending"
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    // Legacy cleanup: remove demo placeholder transactions if they exist.
+    let _ = conn.execute("DELETE FROM transactions WHERE id LIKE 'tx_demo_%'", []);
 
     Ok(())
 }

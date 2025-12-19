@@ -71,6 +71,47 @@ fn parse_hex_32(s: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
+fn parse_ss58_account_id_32(s: &str, expected_prefix: u16) -> Result<[u8; 32], String> {
+    use blake2::digest::Digest;
+    use blake2::Blake2b512;
+
+    let data = bs58::decode(s.trim())
+        .into_vec()
+        .map_err(|e| format!("invalid SS58: {e}"))?;
+
+    // For prefix < 64: [prefix(1)][account(32)][checksum(2)]
+    if data.len() != 35 {
+        return Err("invalid SS58 length".to_string());
+    }
+    let prefix = data[0] as u16;
+    if prefix != expected_prefix {
+        return Err(format!("SS58 prefix mismatch (expected {expected_prefix}, got {prefix})"));
+    }
+
+    let checksum = &data[data.len() - 2..];
+    let payload = &data[..data.len() - 2];
+    let mut hasher = Blake2b512::new();
+    hasher.update(b"SS58PRE");
+    hasher.update(payload);
+    let hash = hasher.finalize();
+    if checksum != &hash[..2] {
+        return Err("invalid SS58 checksum".to_string());
+    }
+
+    let mut account = [0u8; 32];
+    account.copy_from_slice(&data[1..33]);
+    Ok(account)
+}
+
+fn parse_recipient_32(s: &str) -> Result<[u8; 32], String> {
+    let s_trim = s.trim();
+    if s_trim.starts_with("0x") || s_trim.len() == 64 {
+        return parse_hex_32(s_trim);
+    }
+    // PRAPH runtime uses SS58 prefix 42.
+    parse_ss58_account_id_32(s_trim, 42)
+}
+
 fn build_v1_plaintext(note_nonce: &[u8; 32], amount: u128, metadata: &[u8]) -> Vec<u8> {
     const MAGIC: &[u8; 4] = b"PRAF";
     const VERSION: u8 = 1;
@@ -423,7 +464,7 @@ pub async fn send_transaction(
     let sender_sk = SpendingKey::from_bytes(spending_key_bytes);
     let sender_fvk = sender_sk.derive_full_viewing_key();
 
-    let to_bytes = parse_hex_32(&params.to)?;
+    let to_bytes = parse_recipient_32(&params.to)?;
     let to_sk = SpendingKey::from_bytes(to_bytes);
     let to_fvk = to_sk.derive_full_viewing_key();
 
