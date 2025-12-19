@@ -19,6 +19,15 @@ pub struct DbState {
     pub db_path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct SpendableNoteRow {
+    pub commitment: String,
+    pub commitment_index: u64,
+    pub amount_minor: i64,
+    pub nonce_hex: String,
+    pub nullifier_hex: String,
+}
+
 pub fn wallet_db_path(identifier: &str) -> Result<PathBuf, String> {
     let proj = ProjectDirs::from("org", "praph", identifier)
         .ok_or_else(|| "Failed to resolve app data directory".to_string())?;
@@ -242,6 +251,50 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
 
     out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(out)
+}
+
+pub fn list_spendable_notes(db: &DbState) -> Result<Vec<SpendableNoteRow>, String> {
+    let conn = open_db(db)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT commitment, commitment_index, amount_minor, nonce, nullifier \
+             FROM notes \
+             WHERE spent=0 AND nonce IS NOT NULL AND nonce <> '' AND nullifier IS NOT NULL AND nullifier <> '' \
+             ORDER BY amount_minor ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(SpendableNoteRow {
+                commitment: r.get(0)?,
+                commitment_index: r.get::<_, i64>(1)? as u64,
+                amount_minor: r.get(2)?,
+                nonce_hex: r.get(3)?,
+                nullifier_hex: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+pub fn mark_notes_spent(db: &DbState, commitments: &[String]) -> Result<(), String> {
+    if commitments.is_empty() {
+        return Ok(());
+    }
+    let conn = open_db(db)?;
+    let mut stmt = conn
+        .prepare("UPDATE notes SET spent=1 WHERE commitment=?1")
+        .map_err(|e| e.to_string())?;
+    for c in commitments {
+        stmt.execute(params![c]).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn confirm_pending(db: &DbState) -> Result<(), String> {

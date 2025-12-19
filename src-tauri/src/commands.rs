@@ -17,6 +17,72 @@ pub fn app_info(state: tauri::State<'_, crate::AppState>) -> AppInfo {
     }
 }
 
+fn encrypt_memo_v1(plaintext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Result<Vec<u8>, String> {
+    use aead::generic_array::GenericArray;
+    use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit};
+
+    let key_array = GenericArray::from_slice(key);
+    let nonce_array = GenericArray::from_slice(nonce);
+    let cipher = ChaCha20Poly1305::new(key_array);
+
+    let mut ciphertext = plaintext.to_vec();
+    let tag = cipher
+        .encrypt_in_place_detached(nonce_array, b"", &mut ciphertext)
+        .map_err(|e| format!("memo encryption failed: {e}"))?;
+
+    let mut out = nonce.to_vec();
+    out.extend_from_slice(&ciphertext);
+    out.extend_from_slice(tag.as_slice());
+    Ok(out)
+}
+
+fn parse_amount_minor(amount: &str) -> i64 {
+    let raw = amount.split_whitespace().next().unwrap_or("0");
+    let (whole, frac) = match raw.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (raw, ""),
+    };
+
+    let sign = if whole.starts_with('-') { -1i64 } else { 1i64 };
+    let whole_digits = whole.trim_start_matches('-');
+
+    let whole_value: i64 = whole_digits.parse().unwrap_or(0);
+    let mut frac_digits = frac.to_string();
+    if frac_digits.len() > 4 {
+        frac_digits.truncate(4);
+    }
+    while frac_digits.len() < 4 {
+        frac_digits.push('0');
+    }
+    let frac_value: i64 = frac_digits.parse().unwrap_or(0);
+
+    sign * (whole_value * 10_000 + frac_value)
+}
+
+fn parse_hex_32(s: &str) -> Result<[u8; 32], String> {
+    let s = s.trim();
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    let bytes = hex::decode(s).map_err(|e| e.to_string())?;
+    if bytes.len() != 32 {
+        return Err("address must be 32-byte hex".to_string());
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn build_v1_plaintext(note_nonce: &[u8; 32], amount: u128, metadata: &[u8]) -> Vec<u8> {
+    const MAGIC: &[u8; 4] = b"PRAF";
+    const VERSION: u8 = 1;
+    let mut out = Vec::with_capacity(4 + 1 + 32 + 16 + metadata.len());
+    out.extend_from_slice(MAGIC);
+    out.push(VERSION);
+    out.extend_from_slice(note_nonce);
+    out.extend_from_slice(&amount.to_le_bytes());
+    out.extend_from_slice(metadata);
+    out
+}
+
 #[tauri::command]
 pub fn get_balance(db: tauri::State<'_, DbState>) -> Result<Balance, String> {
     db::get_balance(&db)
@@ -41,6 +107,8 @@ pub async fn rescan(
 enum HelperRequest {
     GetMemosByFingerprint { fingerprint: String },
     GetNullifierStatus { nullifier: String },
+    GetStateRoots,
+    GenerateWitnesses { spends: Vec<SpendRequest> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +116,15 @@ enum HelperRequest {
 enum HelperResponse {
     GetMemosByFingerprintResult { notes: Vec<EncryptedNoteResponse> },
     GetNullifierStatusResult { exists: bool },
+    StateRootsResult {
+        commitment_root: String,
+        nullifier_root: String,
+    },
+    GenerateWitnessesResult {
+        spend_witnesses_count: usize,
+        spend_witnesses: Vec<ApiSpendWitness>,
+        success: bool,
+    },
     Error { message: String },
 }
 
@@ -57,6 +134,27 @@ struct EncryptedNoteResponse {
     pub commitment_index: u64,
     pub encrypted_memo: Option<String>,
     pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SpendRequest {
+    pub commitment_index: u64,
+    pub commitment: String,
+    pub nullifier: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ApiMerklePath {
+    pub siblings: Vec<String>,
+    pub direction_bits: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ApiSpendWitness {
+    pub commitment_path: ApiMerklePath,
+    pub commitment_index: u64,
+    pub nullifier_path: ApiMerklePath,
+    pub nullifier_index: u64,
 }
 
 fn decrypt_memo_v1(encrypted: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
@@ -272,15 +370,380 @@ pub fn get_sync_metadata(db: tauri::State<'_, DbState>) -> Result<SyncMetadata, 
 }
 
 #[tauri::command]
-pub fn send_transaction(db: tauri::State<'_, DbState>, params: SendParams) -> Result<SendResult, String> {
+pub async fn send_transaction(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    params: SendParams,
+) -> Result<SendResult, String> {
+    use praph_circuits::action::{BridgeAction, OutputAction, SpendAction};
+    use praph_circuits::hash::{fr_from_bytes, fr_to_bytes, poseidon_hash};
+    use praph_circuits::inputs::{ClientPrivateInputs, ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES};
+    use praph_circuits::keys::SpendingKey;
+    use praph_circuits::merkle::MerklePath;
+    use praph_circuits::note::Note;
+    use praph_circuits::halo2::enabled::{create_client_action_proof, load_output_keys, load_spend_keys, ClientActionCircuit};
+    use rand::RngCore;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+    use std::path::PathBuf;
+
     let tx_id = db::random_id("tx");
-    let amount = if params.amount.contains(' ') {
-        params.amount
+
+    let amount_display = if params.amount.contains(' ') {
+        params.amount.clone()
     } else {
         format!("{} PRAF", params.amount)
     };
+    let amount_minor_i64 = parse_amount_minor(&amount_display);
+    if amount_minor_i64 <= 0 {
+        return Err("amount must be positive".to_string());
+    }
+    let amount_minor_u128 = amount_minor_i64 as u128;
+
     let fee = "0.0100 PRAF".to_string();
-    db::insert_outgoing(&db, tx_id.clone(), amount, fee, params.memo)?;
+
+    let spending_key_bytes = {
+        let guard = wallet
+            .unlocked_seed
+            .lock()
+            .map_err(|_| "Wallet state lock poisoned".to_string())?;
+        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
+        if seed.len() < 32 {
+            return Err("Seed too short".to_string());
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&seed[..32]);
+        out
+    };
+    let sender_sk = SpendingKey::from_bytes(spending_key_bytes);
+    let sender_fvk = sender_sk.derive_full_viewing_key();
+
+    let to_bytes = parse_hex_32(&params.to)?;
+    let to_sk = SpendingKey::from_bytes(to_bytes);
+    let to_fvk = to_sk.derive_full_viewing_key();
+
+    let spendable = db::list_spendable_notes(&db)?;
+    let mut selected = Vec::new();
+    let mut total_selected: i64 = 0;
+    for n in spendable {
+        if total_selected >= amount_minor_i64 {
+            break;
+        }
+        selected.push(n);
+        total_selected = total_selected.saturating_add(selected.last().unwrap().amount_minor);
+    }
+    if total_selected < amount_minor_i64 {
+        return Err("insufficient balance".to_string());
+    }
+    let change_amount_minor: i64 = total_selected - amount_minor_i64;
+    let change_amount_u128: u128 = if change_amount_minor <= 0 { 0 } else { change_amount_minor as u128 };
+
+    let helper = db::get_helper_service_url(&db)?;
+    let helper_url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
+    let http = reqwest::Client::new();
+
+    let roots_resp = http
+        .post(&helper_url)
+        .json(&HelperRequest::GetStateRoots)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let roots_resp: HelperResponse = roots_resp.json().await.map_err(|e| e.to_string())?;
+    let (commitment_root_bytes, nullifier_root_bytes) = match roots_resp {
+        HelperResponse::StateRootsResult {
+            commitment_root,
+            nullifier_root,
+        } => {
+            let c = hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            let n = hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            if c.len() != 32 || n.len() != 32 {
+                return Err("invalid state roots".to_string());
+            }
+            let mut c_arr = [0u8; 32];
+            c_arr.copy_from_slice(&c);
+            let mut n_arr = [0u8; 32];
+            n_arr.copy_from_slice(&n);
+            (c_arr, n_arr)
+        }
+        HelperResponse::Error { message } => return Err(message),
+        _ => return Err("unexpected helper response".to_string()),
+    };
+    let commitment_root_fr = fr_from_bytes(&commitment_root_bytes);
+    let nullifier_root_fr = fr_from_bytes(&nullifier_root_bytes);
+
+    let spends_req = selected
+        .iter()
+        .map(|n| SpendRequest {
+            commitment_index: n.commitment_index,
+            commitment: n.commitment.clone(),
+            nullifier: n.nullifier_hex.clone(),
+        })
+        .collect::<Vec<_>>();
+    let witness_resp = http
+        .post(&helper_url)
+        .json(&HelperRequest::GenerateWitnesses { spends: spends_req })
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let witness_resp: HelperResponse = witness_resp.json().await.map_err(|e| e.to_string())?;
+    let witnesses = match witness_resp {
+        HelperResponse::GenerateWitnessesResult {
+            success: true,
+            spend_witnesses,
+            ..
+        } => spend_witnesses,
+        HelperResponse::Error { message } => return Err(message),
+        _ => return Err("unexpected helper response".to_string()),
+    };
+    if witnesses.len() != selected.len() {
+        return Err("witness count mismatch".to_string());
+    }
+
+    fn parse_api_merkle_path(path: ApiMerklePath) -> Result<MerklePath, String> {
+        let mut siblings_fr = Vec::with_capacity(path.siblings.len());
+        for s in path.siblings {
+            let b = hex::decode(s.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            if b.len() != 32 {
+                return Err("invalid merkle sibling".to_string());
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            siblings_fr.push(fr_from_bytes(&arr));
+        }
+        Ok(MerklePath::new(siblings_fr, path.direction_bits))
+    }
+
+    let sender_recipient_commitment = fr_from_bytes(&spending_key_bytes);
+    let mut spend_actions = Vec::with_capacity(selected.len());
+    let mut spend_nullifiers = Vec::with_capacity(selected.len());
+    for (n, w) in selected.iter().zip(witnesses.into_iter()) {
+        let nonce_raw = hex::decode(n.nonce_hex.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+        if nonce_raw.len() != 32 {
+            return Err("invalid note nonce".to_string());
+        }
+        let mut nonce = [0u8; 32];
+        nonce.copy_from_slice(&nonce_raw);
+
+        let spend_note = Note::new(
+            sender_sk,
+            sender_fvk.incoming().clone(),
+            n.amount_minor as u128,
+            sender_recipient_commitment,
+            nonce,
+        );
+        let nullifier = spend_note.nullifier(n.commitment_index);
+        spend_nullifiers.push(nullifier);
+
+        let commitment_path = parse_api_merkle_path(w.commitment_path)?;
+        let nullifier_path = parse_api_merkle_path(w.nullifier_path)?;
+
+        spend_actions.push(SpendAction::new(
+            spend_note,
+            commitment_path,
+            n.commitment_index,
+            nullifier_path,
+            w.nullifier_index,
+        ));
+    }
+
+    let mut rng = ChaCha20Rng::from_entropy();
+    let mut output_nonce = [0u8; 32];
+    rng.fill_bytes(&mut output_nonce);
+
+    let recipient_commitment = fr_from_bytes(&to_bytes);
+    let output_note = Note::new(
+        to_sk,
+        to_fvk.incoming().clone(),
+        amount_minor_u128,
+        recipient_commitment,
+        output_nonce,
+    );
+    let output_commitment = output_note.commitment();
+    let output_commitment_bytes = fr_to_bytes(&output_commitment);
+
+    let mut output_actions = vec![OutputAction {
+        note: output_note.clone(),
+        enabled: true,
+    }];
+
+    let mut output_commitments = vec![output_commitment];
+
+    let mut change_note_opt: Option<(Note, [u8; 32])> = None;
+    if change_amount_u128 > 0 {
+        let mut change_nonce = [0u8; 32];
+        rng.fill_bytes(&mut change_nonce);
+        let change_note = Note::new(
+            sender_sk,
+            sender_fvk.incoming().clone(),
+            change_amount_u128,
+            sender_recipient_commitment,
+            change_nonce,
+        );
+        let change_commitment = change_note.commitment();
+        let change_commitment_bytes = fr_to_bytes(&change_commitment);
+        output_actions.push(OutputAction {
+            note: change_note.clone(),
+            enabled: true,
+        });
+        output_commitments.push(change_commitment);
+        change_note_opt = Some((change_note, change_commitment_bytes));
+    }
+
+    let encrypted_l2_message = vec![0xFFu8; MAX_ENCRYPTED_MESSAGE_BYTES];
+    let mut public_inputs = ClientPublicInputs {
+        commitment_root: commitment_root_fr,
+        nullifier_root: nullifier_root_fr,
+        next_commitment_root: commitment_root_fr,
+        next_nullifier_root: nullifier_root_fr,
+        spend_nullifiers: spend_nullifiers.clone(),
+        output_commitments: output_commitments.clone(),
+        encrypted_l2_message: encrypted_l2_message.clone(),
+    };
+    public_inputs.pad_in_place();
+
+    let private_inputs = ClientPrivateInputs {
+        spend_actions,
+        output_actions,
+        bridge_action: BridgeAction {
+            encrypted_message: encrypted_l2_message.clone(),
+            deposit_value: 0,
+        },
+        tx_fee: 0,
+    };
+
+    let keys_dir = PathBuf::from(
+        std::env::var("PRAPH_CLIENT_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string()),
+    );
+    let (spend_params, spend_pk, _spend_vk) = load_spend_keys(&keys_dir)
+        .map_err(|e| format!("failed to load spend keys: {e:?}"))?;
+    let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir)
+        .map_err(|e| format!("failed to load output keys: {e:?}"))?;
+
+    let mut action_proofs_json: Vec<serde_json::Value> = Vec::new();
+
+    for spend_action in private_inputs.spend_actions.iter() {
+        if !spend_action.enabled {
+            continue;
+        }
+        let nullifier = spend_action.note.nullifier(spend_action.commitment_index);
+        let circuit = ClientActionCircuit::from_spend_action(
+            commitment_root_fr,
+            nullifier_root_fr,
+            spend_action.clone(),
+        );
+        let proof = create_client_action_proof(&spend_params, &spend_pk, &circuit, &mut rng)
+            .map_err(|e| format!("failed to generate spend proof: {e:?}"))?;
+        let spend_pi = serde_json::json!({
+            "commitment_root": hex::encode(fr_to_bytes(&commitment_root_fr)),
+            "nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
+            "next_commitment_root": hex::encode(fr_to_bytes(&commitment_root_fr)),
+            "next_nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
+            "action_output": hex::encode(fr_to_bytes(&nullifier)),
+        });
+        action_proofs_json.push(serde_json::json!({
+            "proof": hex::encode(&proof),
+            "public_inputs": spend_pi,
+            "action_type": "spend",
+        }));
+    }
+
+    let mut chained_commitment_root_fr = commitment_root_fr;
+    for output_action in private_inputs.output_actions.iter() {
+        if !output_action.enabled {
+            continue;
+        }
+        let commitment = output_action.note.commitment();
+        let next_commitment_root = poseidon_hash(&[chained_commitment_root_fr, commitment]);
+        let circuit = ClientActionCircuit::from_output_action(
+            chained_commitment_root_fr,
+            nullifier_root_fr,
+            next_commitment_root,
+            output_action.clone(),
+        );
+        let proof = create_client_action_proof(&output_params, &output_pk, &circuit, &mut rng)
+            .map_err(|e| format!("failed to generate output proof: {e:?}"))?;
+        let out_pi = serde_json::json!({
+            "commitment_root": hex::encode(fr_to_bytes(&chained_commitment_root_fr)),
+            "nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
+            "next_commitment_root": hex::encode(fr_to_bytes(&next_commitment_root)),
+            "next_nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
+            "action_output": hex::encode(fr_to_bytes(&commitment)),
+        });
+        action_proofs_json.push(serde_json::json!({
+            "proof": hex::encode(&proof),
+            "public_inputs": out_pi,
+            "action_type": "output",
+        }));
+        chained_commitment_root_fr = next_commitment_root;
+    }
+
+    let mut final_public_inputs = public_inputs.clone();
+    final_public_inputs.next_commitment_root = chained_commitment_root_fr;
+    let public_inputs_json = serde_json::json!({
+        "commitment_root": hex::encode(fr_to_bytes(&final_public_inputs.commitment_root)),
+        "nullifier_root": hex::encode(fr_to_bytes(&final_public_inputs.nullifier_root)),
+        "next_commitment_root": hex::encode(fr_to_bytes(&final_public_inputs.next_commitment_root)),
+        "next_nullifier_root": hex::encode(fr_to_bytes(&final_public_inputs.next_nullifier_root)),
+        "spend_nullifiers": final_public_inputs.spend_nullifiers.iter().map(|n| hex::encode(fr_to_bytes(n))).collect::<Vec<_>>(),
+        "output_commitments": final_public_inputs.output_commitments.iter().map(|c| hex::encode(fr_to_bytes(c))).collect::<Vec<_>>(),
+        "encrypted_l2_message": hex::encode(&final_public_inputs.encrypted_l2_message),
+    });
+
+    let memo_text = params.memo.clone().unwrap_or_default();
+    let memo_plaintext = build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
+    let mut memo_nonce = [0u8; 12];
+    rng.fill_bytes(&mut memo_nonce);
+    let encrypted_memo = encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
+    let mut output_memos_json = Vec::new();
+    output_memos_json.push(serde_json::json!({
+        "note_commitment": hex::encode(output_commitment_bytes),
+        "fingerprint": hex::encode(to_fvk.fingerprint()),
+        "memo": hex::encode(encrypted_memo),
+    }));
+
+    if let Some((change_note, change_commitment_bytes)) = &change_note_opt {
+        let change_plaintext = build_v1_plaintext(&change_note.nonce, change_amount_u128, b"change");
+        let mut change_nonce = [0u8; 12];
+        rng.fill_bytes(&mut change_nonce);
+        let encrypted_change =
+            encrypt_memo_v1(&change_plaintext, sender_fvk.memo_key().as_bytes(), &change_nonce)?;
+        output_memos_json.push(serde_json::json!({
+            "note_commitment": hex::encode(change_commitment_bytes),
+            "fingerprint": hex::encode(sender_fvk.fingerprint()),
+            "memo": hex::encode(encrypted_change),
+        }));
+    }
+
+    let prover_tip = match params.prover_tip {
+        crate::types::ProverTip::Low => 0u128,
+        crate::types::ProverTip::Medium => 1u128,
+        crate::types::ProverTip::High => 3u128,
+    };
+
+    let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:9091".to_string());
+    let submit_request = serde_json::json!({
+        "public_inputs": public_inputs_json,
+        "action_proofs": serde_json::Value::Array(action_proofs_json),
+        "output_memos": serde_json::Value::Array(output_memos_json),
+        "prover_tip": prover_tip,
+    });
+    let submit_resp = http
+        .post(format!("{}/submit", prover_url.trim_end_matches('/')))
+        .json(&submit_request)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !submit_resp.status().is_success() {
+        let status = submit_resp.status();
+        let text = submit_resp.text().await.unwrap_or_default();
+        return Err(format!("prover rejected submission (status {status}): {text}"));
+    }
+
+    db::insert_outgoing(&db, tx_id.clone(), amount_display, fee, params.memo.clone())?;
+    let spent_commitments = selected.into_iter().map(|n| n.commitment).collect::<Vec<_>>();
+    db::mark_notes_spent(&db, &spent_commitments)?;
+
     Ok(SendResult { tx_id })
 }
 
