@@ -70,6 +70,7 @@ pub fn run() {
             commands::generate_address,
             commands::get_accounts_state,
             commands::create_account,
+            commands::create_account_named,
             commands::switch_account,
             commands::export_viewing_keys,
             commands::export_tvk,

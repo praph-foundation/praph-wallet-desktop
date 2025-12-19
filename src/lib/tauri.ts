@@ -183,7 +183,7 @@ const tauriApi = {
   createAccountNamed: (name: string) =>
     invokeSafe<AccountsState>("create_account_named", { name }),
   switchAccount: (accountIndex: number) =>
-    invokeSafe<AccountsState>("switch_account", { account_index: accountIndex }),
+    invokeSafe<AccountsState>("switch_account", { accountIndex }),
 
   getSettings: () => invokeSafe<Settings>("get_settings"),
   setHelperServiceUrl: (url: string) => invokeSafe<void>("set_helper_service_url", { url }),
