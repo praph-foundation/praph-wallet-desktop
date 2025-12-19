@@ -89,6 +89,17 @@ export interface AddressResult {
   address: string;
 }
 
+export interface AccountInfo {
+  index: number;
+  address: string;
+  isActive: boolean;
+}
+
+export interface AccountsState {
+  accounts: AccountInfo[];
+  activeAccountIndex: number;
+}
+
 export interface Settings {
   helperServiceUrl: string;
 }
@@ -139,6 +150,11 @@ let mockBalance: Balance = {
 
 let mockTxs: TxSummary[] = [];
 
+let mockAccounts: AccountInfo[] = [
+  { index: 0, address: "", isActive: true },
+];
+let mockActiveAccountIndex = 0;
+
 const tauriApi = {
   appInfo: () => invokeSafe<AppInfo>("app_info"),
 
@@ -160,6 +176,11 @@ const tauriApi = {
     invokeSafe<BridgeDepositResult>("bridge_deposit", { params }),
 
   generateAddress: () => invokeSafe<AddressResult>("generate_address"),
+
+  getAccountsState: () => invokeSafe<AccountsState>("get_accounts_state"),
+  createAccount: () => invokeSafe<AccountsState>("create_account"),
+  switchAccount: (accountIndex: number) =>
+    invokeSafe<AccountsState>("switch_account", { account_index: accountIndex }),
 
   getSettings: () => invokeSafe<Settings>("get_settings"),
   setHelperServiceUrl: (url: string) => invokeSafe<void>("set_helper_service_url", { url }),
@@ -225,7 +246,7 @@ const mockApi = {
     await sleep(600);
   },
 
-  sendTransaction: async (params: SendParams): Promise<SendResult> => {
+  sendTransaction: async (_params: SendParams): Promise<SendResult> => {
     await sleep(100);
     throw new Error(
       "sendTransaction is only available in the Tauri desktop app (backend required)"
@@ -244,7 +265,27 @@ const mockApi = {
     return { address: "" };
   },
 
-  bridgeDeposit: async (params: BridgeDepositParams): Promise<BridgeDepositResult> => {
+  getAccountsState: async (): Promise<AccountsState> => {
+    await sleep(50);
+    return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
+  },
+  createAccount: async (): Promise<AccountsState> => {
+    await sleep(50);
+    const next = mockAccounts.length;
+    mockAccounts = [
+      ...mockAccounts.map((a) => ({ ...a, isActive: a.index === mockActiveAccountIndex })),
+      { index: next, address: "", isActive: false },
+    ];
+    return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
+  },
+  switchAccount: async (accountIndex: number): Promise<AccountsState> => {
+    await sleep(50);
+    mockActiveAccountIndex = accountIndex;
+    mockAccounts = mockAccounts.map((a) => ({ ...a, isActive: a.index === accountIndex }));
+    return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
+  },
+
+  bridgeDeposit: async (_params: BridgeDepositParams): Promise<BridgeDepositResult> => {
     await sleep(100);
     throw new Error(
       "bridgeDeposit is only available in the Tauri desktop app (backend required)"

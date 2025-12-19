@@ -136,22 +136,43 @@ impl WalletState {
         Ok(())
     }
 
-    pub fn generate_address(&self) -> Result<AddressResult, String> {
+    fn derive_account_id(seed: &[u8], account_index: u32) -> Result<[u8; 32], String> {
+        use blake2::digest::Digest;
+        use blake2::Blake2b512;
+
+        if seed.len() < 32 {
+            return Err("Seed too short".to_string());
+        }
+
+        // Domain-separated derivation so indices produce independent account IDs.
+        // This is NOT Substrate's sr25519 derivation; it's a deterministic wallet-local scheme.
+        let mut hasher = Blake2b512::new();
+        hasher.update(b"praph_wallet_account_v1");
+        hasher.update(&seed[..32]);
+        hasher.update(account_index.to_le_bytes());
+        let out = hasher.finalize();
+
+        let mut account_bytes = [0u8; 32];
+        account_bytes.copy_from_slice(&out[..32]);
+        Ok(account_bytes)
+    }
+
+    pub fn generate_address_for_index(&self, account_index: u32) -> Result<AddressResult, String> {
         let guard = self
             .unlocked_seed
             .lock()
             .map_err(|_| "Wallet state lock poisoned".to_string())?;
         let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
 
-        if seed.len() < 32 {
-            return Err("Seed too short".to_string());
-        }
-        let mut account_bytes = [0u8; 32];
-        account_bytes.copy_from_slice(&seed[..32]);
+        let account_bytes = Self::derive_account_id(seed, account_index)?;
 
         // PRAPH runtime uses the generic Substrate SS58 prefix 42.
         let address = ss58check_encode(42, &account_bytes)?;
         Ok(AddressResult { address })
+    }
+
+    pub fn generate_address(&self) -> Result<AddressResult, String> {
+        self.generate_address_for_index(0)
     }
 
     pub fn export_viewing_keys(&self, password: String) -> Result<ViewingKeysResult, String> {

@@ -12,12 +12,14 @@ import {
   DialogTrigger,
 } from "../components/ui/dialog";
 import CopyButton from "../components/CopyButton";
+import { useWalletStore } from "../state/walletStore";
 
 export default function ReceivePage() {
   const [qrOpen, setQrOpen] = useState(false);
+  const activeAccountIndex = useWalletStore((s) => s.activeAccountIndex);
 
   const addressQuery = useQuery({
-    queryKey: ["receiveAddress"],
+    queryKey: ["receiveAddress", activeAccountIndex],
     queryFn: api.generateAddress,
   });
 

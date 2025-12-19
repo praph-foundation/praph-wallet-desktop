@@ -3,7 +3,7 @@ use crate::db::DbState;
 use crate::types::{
     AddressResult, AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, ScanNotesParams,
     MintDevFaucetParams, MintDevFaucetResult, SendParams, SendResult, Settings, SyncMetadata,
-    SyncState, TxSummary, WalletCreateResult, WalletStatus,
+    SyncState, TxSummary, WalletCreateResult, WalletStatus, AccountsState, AccountInfo,
 };
 use crate::wallet::WalletState;
 use serde::{Deserialize, Serialize};
@@ -1204,15 +1204,84 @@ pub fn generate_address(
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
 ) -> Result<AddressResult, String> {
-    if let Some(address) = db::get_receive_address(&db)? {
+    let active = db::get_active_account_index(&db)?;
+    if let Some(address) = db::get_receive_address_for_index(&db, active)? {
         // Legacy demo format used `praph1...` (not SS58). Regenerate if detected.
         if !address.starts_with("praph1") {
             return Ok(AddressResult { address });
         }
     }
-    let res = wallet.generate_address()?;
-    db::set_receive_address(&db, res.address.clone())?;
+    let res = wallet.generate_address_for_index(active)?;
+    db::set_receive_address_for_index(&db, active, res.address.clone())?;
     Ok(res)
+}
+
+#[tauri::command]
+pub fn get_accounts_state(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<AccountsState, String> {
+    let count = db::get_account_count(&db)?;
+    let active = db::get_active_account_index(&db)?;
+    let mut accounts = Vec::new();
+
+    for idx in 0..count {
+        let address = match db::get_receive_address_for_index(&db, idx)? {
+            Some(a) if !a.is_empty() && !a.starts_with("praph1") => a,
+            _ => {
+                let a = wallet.generate_address_for_index(idx)?.address;
+                db::set_receive_address_for_index(&db, idx, a.clone())?;
+                a
+            }
+        };
+        accounts.push(AccountInfo {
+            index: idx,
+            address,
+            is_active: idx == active,
+        });
+    }
+
+    Ok(AccountsState {
+        accounts,
+        active_account_index: active,
+    })
+}
+
+#[tauri::command]
+pub fn create_account(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<AccountsState, String> {
+    let count = db::get_account_count(&db)?;
+    let new_index = count;
+    db::set_account_count(&db, count.saturating_add(1))?;
+
+    let address = wallet.generate_address_for_index(new_index)?.address;
+    db::set_receive_address_for_index(&db, new_index, address)?;
+
+    // Keep active account unchanged.
+    get_accounts_state(wallet, db)
+}
+
+#[tauri::command]
+pub fn switch_account(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    account_index: u32,
+) -> Result<AccountsState, String> {
+    let count = db::get_account_count(&db)?;
+    if account_index >= count {
+        return Err("Account index out of range".to_string());
+    }
+    db::set_active_account_index(&db, account_index)?;
+
+    // Ensure address exists for this account.
+    if db::get_receive_address_for_index(&db, account_index)?.is_none() {
+        let address = wallet.generate_address_for_index(account_index)?.address;
+        db::set_receive_address_for_index(&db, account_index, address)?;
+    }
+
+    get_accounts_state(wallet, db)
 }
 
 #[tauri::command]

@@ -117,6 +117,21 @@ pub struct AddressResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountInfo {
+    pub index: u32,
+    pub address: String,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountsState {
+    pub accounts: Vec<AccountInfo>,
+    pub active_account_index: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ViewingKeysResult {
     pub fvk: String,
     pub ivk: String,

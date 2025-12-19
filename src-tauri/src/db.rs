@@ -454,6 +454,66 @@ pub fn set_receive_address(db: &DbState, address: String) -> Result<(), String> 
     set_setting(db, "receive_address", &address)
 }
 
+fn get_u32_setting(db: &DbState, key: &str) -> Result<Option<u32>, String> {
+    Ok(get_setting(db, key)?.and_then(|v| v.parse::<u32>().ok()))
+}
+
+fn set_u32_setting(db: &DbState, key: &str, value: u32) -> Result<(), String> {
+    set_setting(db, key, &value.to_string())
+}
+
+fn receive_address_key_for_index(account_index: u32) -> String {
+    format!("receive_address_{}", account_index)
+}
+
+pub fn get_account_count(db: &DbState) -> Result<u32, String> {
+    // Default to 1 account for existing wallets.
+    Ok(get_u32_setting(db, "account_count")?.unwrap_or(1))
+}
+
+pub fn set_account_count(db: &DbState, count: u32) -> Result<(), String> {
+    set_u32_setting(db, "account_count", count)
+}
+
+pub fn get_active_account_index(db: &DbState) -> Result<u32, String> {
+    Ok(get_u32_setting(db, "active_account_index")?.unwrap_or(0))
+}
+
+pub fn set_active_account_index(db: &DbState, index: u32) -> Result<(), String> {
+    set_u32_setting(db, "active_account_index", index)
+}
+
+pub fn get_receive_address_for_index(
+    db: &DbState,
+    account_index: u32,
+) -> Result<Option<String>, String> {
+    let key = receive_address_key_for_index(account_index);
+    if let Some(v) = get_setting(db, &key)? {
+        return Ok(Some(v));
+    }
+
+    // Legacy fallback for account 0.
+    if account_index == 0 {
+        return get_receive_address(db);
+    }
+    Ok(None)
+}
+
+pub fn set_receive_address_for_index(
+    db: &DbState,
+    account_index: u32,
+    address: String,
+) -> Result<(), String> {
+    let key = receive_address_key_for_index(account_index);
+    set_setting(db, &key, &address)?;
+
+    // Keep legacy key updated for backwards compatibility when index=0.
+    if account_index == 0 {
+        let _ = set_receive_address(db, address);
+    }
+    Ok(())
+}
+
 pub fn get_sync_metadata(db: &DbState) -> Result<SyncMetadata, String> {
     let state = match get_setting(db, "sync_state")?.as_deref() {
         Some("syncing") => SyncState::Syncing,
