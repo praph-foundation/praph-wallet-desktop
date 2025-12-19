@@ -1,5 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/tauri";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
 
 export default function DashboardPage() {
   const appInfoQuery = useQuery({
@@ -20,8 +27,8 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <div className="text-xl font-semibold">Dashboard</div>
-        <div className="mt-1 text-sm text-zinc-600">
+        <div className="text-2xl font-semibold">Dashboard</div>
+        <div className="mt-1 text-sm text-muted-foreground">
           {appInfoQuery.data
             ? `v${appInfoQuery.data.version} · ${appInfoQuery.data.os}`
             : "Loading app info..."}
@@ -29,62 +36,66 @@ export default function DashboardPage() {
       </div>
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
-        <div className="rounded-lg border border-zinc-200 p-4">
-          <div className="text-xs text-zinc-500">Total</div>
-          <div className="mt-1 text-lg font-semibold">
-            {balanceQuery.data?.total ?? "-"}
-          </div>
-        </div>
-        <div className="rounded-lg border border-zinc-200 p-4">
-          <div className="text-xs text-zinc-500">Confirmed</div>
-          <div className="mt-1 text-lg font-semibold">
-            {balanceQuery.data?.confirmed ?? "-"}
-          </div>
-        </div>
-        <div className="rounded-lg border border-zinc-200 p-4">
-          <div className="text-xs text-zinc-500">Pending</div>
-          <div className="mt-1 text-lg font-semibold">
-            {balanceQuery.data?.pending ?? "-"}
-          </div>
-        </div>
-        <div className="rounded-lg border border-zinc-200 p-4">
-          <div className="text-xs text-zinc-500">Unspent</div>
-          <div className="mt-1 text-lg font-semibold">
-            {balanceQuery.data?.unspent ?? "-"}
-          </div>
-        </div>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Total</CardDescription>
+            <CardTitle className="text-2xl">{balanceQuery.data?.total ?? "-"}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Confirmed</CardDescription>
+            <CardTitle className="text-2xl">
+              {balanceQuery.data?.confirmed ?? "-"}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Pending</CardDescription>
+            <CardTitle className="text-2xl">{balanceQuery.data?.pending ?? "-"}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Unspent</CardDescription>
+            <CardTitle className="text-2xl">{balanceQuery.data?.unspent ?? "-"}</CardTitle>
+          </CardHeader>
+        </Card>
       </section>
 
-      <section className="rounded-lg border border-zinc-200">
-        <div className="border-b border-zinc-200 p-4">
-          <div className="text-sm font-semibold">Transaction History</div>
-          <div className="mt-1 text-xs text-zinc-500">
+      <Card>
+        <CardHeader>
+          <CardTitle>Transaction History</CardTitle>
+          <CardDescription>
             TVK export and details view will be implemented after DB + client wiring.
-          </div>
-        </div>
-        <div className="divide-y divide-zinc-200">
-          {(txsQuery.data ?? []).map((tx) => (
-            <div key={tx.id} className="flex items-center justify-between p-4">
-              <div>
-                <div className="text-sm font-medium">
-                  {tx.direction === "incoming" ? "Received" : "Sent"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="divide-y">
+            {(txsQuery.data ?? []).map((tx) => (
+              <div key={tx.id} className="flex items-center justify-between p-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    {tx.direction === "incoming" ? "Received" : "Sent"}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {new Date(tx.timestamp * 1000).toLocaleString()} · {tx.status} · {tx.id}
+                  </div>
                 </div>
-                <div className="mt-0.5 text-xs text-zinc-500">
-                  {new Date(tx.timestamp * 1000).toLocaleString()} · {tx.status}
+                <div className="text-right">
+                  <div className="text-sm font-semibold">{tx.amount}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">Fee: {tx.fee}</div>
                 </div>
               </div>
-              <div className="text-right">
-                <div className="text-sm font-semibold">{tx.amount}</div>
-                <div className="mt-0.5 text-xs text-zinc-500">Fee: {tx.fee}</div>
-              </div>
-            </div>
-          ))}
+            ))}
 
-          {txsQuery.data?.length === 0 ? (
-            <div className="p-4 text-sm text-zinc-600">No transactions yet.</div>
-          ) : null}
-        </div>
-      </section>
+            {txsQuery.data?.length === 0 ? (
+              <div className="p-4 text-sm text-muted-foreground">No transactions yet.</div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

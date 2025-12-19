@@ -1,5 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../lib/tauri";
+import { Button } from "./ui/button";
+import { Card, CardContent } from "./ui/card";
 import { useWalletStore } from "../state/walletStore";
 
 function NavItem({ to, label }: { to: string; label: string }) {
@@ -40,29 +42,30 @@ export default function AppLayout() {
             <NavItem to="/settings" label="Settings" />
           </nav>
 
-          <div className="mt-6 rounded border border-zinc-200 p-3">
-            <div className="text-xs text-zinc-500">Wallet</div>
-            <div className="mt-1 text-sm font-medium">{lockState}</div>
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                className="rounded bg-zinc-900 px-3 py-1.5 text-xs text-white"
-                onClick={async () => {
-                  if (lockState === "locked") {
-                    navigate("/unlock");
-                    return;
-                  }
-                  try {
-                    await api.walletLock();
-                  } finally {
-                    lock();
-                  }
-                }}
-              >
-                {lockState === "locked" ? "Unlock" : "Lock"}
-              </button>
-            </div>
-          </div>
+          <Card className="mt-6">
+            <CardContent className="p-3">
+              <div className="text-xs text-muted-foreground">Wallet</div>
+              <div className="mt-1 text-sm font-medium">{lockState}</div>
+              <div className="mt-3 flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    if (lockState === "locked") {
+                      navigate("/unlock");
+                      return;
+                    }
+                    try {
+                      await api.walletLock();
+                    } finally {
+                      lock();
+                    }
+                  }}
+                >
+                  {lockState === "locked" ? "Unlock" : "Lock"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </aside>
 
         <main className="flex-1 overflow-auto">

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { api } from "./lib/tauri";
 import AppRoutes from "./routes";
 import { useWalletStore } from "./state/walletStore";
+import { Toaster } from "./components/ui/sonner";
 
 export default function App() {
   const setHasWallet = useWalletStore((s) => s.setHasWallet);
@@ -26,5 +27,10 @@ export default function App() {
     };
   }, [lock, setHasWallet, unlock]);
 
-  return <AppRoutes />;
+  return (
+    <>
+      <AppRoutes />
+      <Toaster />
+    </>
+  );
 }
