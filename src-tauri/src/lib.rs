@@ -59,7 +59,9 @@ pub fn run() {
             commands::bridge_deposit,
             commands::generate_address,
             commands::export_viewing_keys,
-            commands::export_tvk
+            commands::export_tvk,
+            commands::get_settings,
+            commands::set_helper_service_url
         ])
         .run(ctx)
         .expect("error while running tauri application");

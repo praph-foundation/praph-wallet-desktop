@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/tauri";
 import { useWalletStore } from "../state/walletStore";
@@ -30,6 +30,22 @@ export default function SettingsPage() {
   const [rescanOpen, setRescanOpen] = useState(false);
   const [rescanRunning, setRescanRunning] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getSettings()
+      .then((s) => {
+        if (cancelled) return;
+        setHelperServiceUrl(s.helperServiceUrl);
+        setUrl(s.helperServiceUrl);
+      })
+      .catch(() => {
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setHelperServiceUrl]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -55,9 +71,14 @@ export default function SettingsPage() {
             <div className="flex items-end">
               <Button
                 className="w-full"
-                onClick={() => {
-                  setHelperServiceUrl(url);
-                  toast.success("Saved helper service URL");
+                onClick={async () => {
+                  try {
+                    await api.setHelperServiceUrl(url);
+                    setHelperServiceUrl(url);
+                    toast.success("Saved helper service URL");
+                  } catch {
+                    toast.error("Failed to save helper service URL");
+                  }
                 }}
               >
                 Save

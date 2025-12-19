@@ -57,6 +57,10 @@ export interface WalletCreateResult {
   mnemonic: string;
 }
 
+export interface Settings {
+  helperServiceUrl: string;
+}
+
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && Boolean((window as any).__TAURI__);
 }
@@ -67,6 +71,7 @@ function sleep(ms: number): Promise<void> {
 
 let mockUnlocked = true;
 let mockHasWallet = true;
+let mockHelperServiceUrl = "http://localhost:8080";
 
 let mockBalance: Balance = {
   total: "42.0000 PRAF",
@@ -113,6 +118,9 @@ const tauriApi = {
   sendTransaction: (params: SendParams) => invoke<SendResult>("send_transaction", { params }),
   bridgeDeposit: (params: BridgeDepositParams) =>
     invoke<BridgeDepositResult>("bridge_deposit", { params }),
+
+  getSettings: () => invoke<Settings>("get_settings"),
+  setHelperServiceUrl: (url: string) => invoke<void>("set_helper_service_url", { url }),
 };
 
 const mockApi = {
@@ -201,6 +209,15 @@ const mockApi = {
       ...mockTxs,
     ];
     return { txId };
+  },
+
+  getSettings: async (): Promise<Settings> => {
+    await sleep(50);
+    return { helperServiceUrl: mockHelperServiceUrl };
+  },
+  setHelperServiceUrl: async (url: string): Promise<void> => {
+    mockHelperServiceUrl = url;
+    await sleep(50);
   },
 };
 

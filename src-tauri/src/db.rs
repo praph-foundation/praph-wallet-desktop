@@ -254,3 +254,38 @@ fn format_amount_minor(amount_minor: i64) -> String {
     let frac = v % 10_000;
     format!("{}{whole}.{frac:04} PRAF", sign)
 }
+
+fn get_setting(db: &DbState, key: &str) -> Result<Option<String>, String> {
+    let conn = open_db(db)?;
+    let mut stmt = conn
+        .prepare("SELECT value FROM settings WHERE key = ?1")
+        .map_err(|e| e.to_string())?;
+
+    let mut rows = stmt
+        .query_map(params![key], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+
+    match rows.next() {
+        Some(v) => Ok(Some(v.map_err(|e| e.to_string())?)),
+        None => Ok(None),
+    }
+}
+
+fn set_setting(db: &DbState, key: &str, value: &str) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)\
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![key, value],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn get_helper_service_url(db: &DbState) -> Result<String, String> {
+    Ok(get_setting(db, "helper_service_url")?.unwrap_or_else(|| "http://localhost:8080".to_string()))
+}
+
+pub fn set_helper_service_url(db: &DbState, url: String) -> Result<(), String> {
+    set_setting(db, "helper_service_url", &url)
+}

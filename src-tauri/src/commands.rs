@@ -1,8 +1,8 @@
 use crate::db;
 use crate::db::DbState;
 use crate::types::{
-    AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, SendParams, SendResult, TxSummary,
-    WalletCreateResult, WalletStatus,
+    AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, SendParams, SendResult, Settings,
+    TxSummary, WalletCreateResult, WalletStatus,
 };
 use crate::wallet::WalletState;
 
@@ -114,4 +114,16 @@ pub fn export_tvk(
     password: String,
 ) -> Result<crate::types::TvkResult, String> {
     wallet.export_tvk(tx_id, password)
+}
+
+#[tauri::command]
+pub fn get_settings(db: tauri::State<'_, DbState>) -> Result<Settings, String> {
+    Ok(Settings {
+        helper_service_url: db::get_helper_service_url(&db)?,
+    })
+}
+
+#[tauri::command]
+pub fn set_helper_service_url(db: tauri::State<'_, DbState>, url: String) -> Result<(), String> {
+    db::set_helper_service_url(&db, url)
 }

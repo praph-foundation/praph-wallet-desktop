@@ -114,3 +114,9 @@ pub struct ViewingKeysResult {
 pub struct TvkResult {
     pub tvk: String,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    pub helper_service_url: String,
+}
