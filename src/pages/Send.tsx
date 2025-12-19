@@ -4,6 +4,15 @@ import { api, SendParams } from "../lib/tauri";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 
@@ -14,6 +23,7 @@ export default function SendPage() {
   const [amount, setAmount] = useState("");
   const [memo, setMemo] = useState("");
   const [proverTip, setProverTip] = useState<SendParams["proverTip"]>("medium");
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const sendMutation = useMutation({
     mutationFn: (params: SendParams) => api.sendTransaction(params),
@@ -26,6 +36,8 @@ export default function SendPage() {
       toast.error(e instanceof Error ? e.message : "Failed to send");
     },
   });
+
+  const canSubmit = Boolean(to && amount && !sendMutation.isPending);
 
   return (
     <div className="space-y-6">
@@ -86,20 +98,69 @@ export default function SendPage() {
             </div>
 
             <div className="pt-2">
-              <Button
-                className="w-full"
-                disabled={!to || !amount || sendMutation.isPending}
-                onClick={() =>
-                  sendMutation.mutate({
-                    to,
-                    amount,
-                    memo: memo || undefined,
-                    proverTip,
-                  })
-                }
-              >
-                {sendMutation.isPending ? "Sending..." : "Send"}
-              </Button>
+              <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                <DialogTrigger asChild>
+                  <Button className="w-full" disabled={!canSubmit}>
+                    Review & Send
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Confirm transaction</DialogTitle>
+                    <DialogDescription>
+                      Review the details before generating a proof and broadcasting.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-3 text-sm">
+                    <div className="space-y-1">
+                      <div className="text-muted-foreground">Recipient</div>
+                      <div className="break-all font-mono text-xs">{to}</div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-muted-foreground">Amount</div>
+                      <div className="font-medium">{amount}</div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-muted-foreground">Prover tip</div>
+                      <div className="font-medium">{proverTip}</div>
+                    </div>
+                    {memo ? (
+                      <div className="space-y-1">
+                        <div className="text-muted-foreground">Memo</div>
+                        <div className="break-words">{memo}</div>
+                      </div>
+                    ) : null}
+                    <div className="text-xs text-muted-foreground">
+                      The spending key never leaves the backend.
+                    </div>
+                  </div>
+
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setConfirmOpen(false)}
+                      disabled={sendMutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        sendMutation.mutate({
+                          to,
+                          amount,
+                          memo: memo || undefined,
+                          proverTip,
+                        });
+                        setConfirmOpen(false);
+                      }}
+                      disabled={!canSubmit}
+                    >
+                      {sendMutation.isPending ? "Sending..." : "Confirm"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </div>
 
             {sendMutation.data ? (

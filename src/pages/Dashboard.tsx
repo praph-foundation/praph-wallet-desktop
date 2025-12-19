@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/tauri";
 import {
@@ -7,8 +8,18 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 
 export default function DashboardPage() {
+  const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
+
   const appInfoQuery = useQuery({
     queryKey: ["appInfo"],
     queryFn: api.appInfo,
@@ -23,6 +34,14 @@ export default function DashboardPage() {
     queryKey: ["transactions"],
     queryFn: api.listTransactions,
   });
+
+  const selectedTx = (txsQuery.data ?? []).find((t) => t.id === selectedTxId) ?? null;
+
+  function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" {
+    if (status === "confirmed") return "default";
+    if (status === "pending") return "secondary";
+    return "destructive";
+  }
 
   return (
     <div className="space-y-6">
@@ -74,7 +93,12 @@ export default function DashboardPage() {
         <CardContent className="p-0">
           <div className="divide-y">
             {(txsQuery.data ?? []).map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between p-4">
+              <button
+                key={tx.id}
+                type="button"
+                className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-muted/30"
+                onClick={() => setSelectedTxId(tx.id)}
+              >
                 <div className="min-w-0">
                   <div className="text-sm font-medium">
                     {tx.direction === "incoming" ? "Received" : "Sent"}
@@ -85,9 +109,11 @@ export default function DashboardPage() {
                 </div>
                 <div className="text-right">
                   <div className="text-sm font-semibold">{tx.amount}</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">Fee: {tx.fee}</div>
+                  <div className="mt-1 flex items-center justify-end gap-2">
+                    <Badge variant={statusBadgeVariant(tx.status)}>{tx.status}</Badge>
+                  </div>
                 </div>
-              </div>
+              </button>
             ))}
 
             {txsQuery.data?.length === 0 ? (
@@ -96,6 +122,52 @@ export default function DashboardPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={selectedTxId !== null} onOpenChange={(open) => setSelectedTxId(open ? selectedTxId : null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Transaction details</DialogTitle>
+            <DialogDescription>Detailed view and TVK export will be added.</DialogDescription>
+          </DialogHeader>
+
+          {selectedTx ? (
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <div className="text-muted-foreground">Status</div>
+                <Badge variant={statusBadgeVariant(selectedTx.status)}>{selectedTx.status}</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-muted-foreground">Direction</div>
+                <div>{selectedTx.direction}</div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-muted-foreground">Amount</div>
+                <div className="font-medium">{selectedTx.amount}</div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-muted-foreground">Fee</div>
+                <div>{selectedTx.fee}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-muted-foreground">TxID</div>
+                <div className="break-all font-mono text-xs">{selectedTx.id}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-muted-foreground">Timestamp</div>
+                <div>{new Date(selectedTx.timestamp * 1000).toLocaleString()}</div>
+              </div>
+              {selectedTx.memo ? (
+                <div className="space-y-1">
+                  <div className="text-muted-foreground">Memo</div>
+                  <div className="break-words">{selectedTx.memo}</div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No transaction selected.</div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
