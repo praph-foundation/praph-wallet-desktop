@@ -48,8 +48,26 @@ export interface BridgeDepositResult {
   txId: string;
 }
 
+export interface WalletStatus {
+  hasWallet: boolean;
+  isUnlocked: boolean;
+}
+
+export interface WalletCreateResult {
+  mnemonic: string;
+}
+
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
+
+  walletStatus: () => invoke<WalletStatus>("wallet_status"),
+  walletCreate: (password: string) =>
+    invoke<WalletCreateResult>("wallet_create", { password }),
+  walletImport: (mnemonic: string, password: string) =>
+    invoke<void>("wallet_import", { mnemonic, password }),
+  walletUnlock: (password: string) => invoke<void>("wallet_unlock", { password }),
+  walletLock: () => invoke<void>("wallet_lock"),
+
   getBalance: () => invoke<Balance>("get_balance"),
   listTransactions: () => invoke<TxSummary[]>("list_transactions"),
   rescan: () => invoke<void>("rescan"),

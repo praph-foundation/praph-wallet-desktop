@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { api } from "../lib/tauri";
 import { useWalletStore } from "../state/walletStore";
 
 function NavItem({ to, label }: { to: string; label: string }) {
@@ -18,9 +19,9 @@ function NavItem({ to, label }: { to: string; label: string }) {
 }
 
 export default function AppLayout() {
+  const navigate = useNavigate();
   const lockState = useWalletStore((s) => s.lockState);
   const lock = useWalletStore((s) => s.lock);
-  const unlock = useWalletStore((s) => s.unlock);
 
   return (
     <div className="h-full bg-white text-zinc-900">
@@ -46,7 +47,17 @@ export default function AppLayout() {
               <button
                 type="button"
                 className="rounded bg-zinc-900 px-3 py-1.5 text-xs text-white"
-                onClick={() => (lockState === "locked" ? unlock() : lock())}
+                onClick={async () => {
+                  if (lockState === "locked") {
+                    navigate("/unlock");
+                    return;
+                  }
+                  try {
+                    await api.walletLock();
+                  } finally {
+                    lock();
+                  }
+                }}
               >
                 {lockState === "locked" ? "Unlock" : "Lock"}
               </button>

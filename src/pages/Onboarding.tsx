@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { api } from "../lib/tauri";
 import { useWalletStore } from "../state/walletStore";
 
 export default function OnboardingPage() {
@@ -8,6 +9,9 @@ export default function OnboardingPage() {
   const [mode, setMode] = useState<"create" | "import">("create");
   const [password, setPassword] = useState("");
   const [mnemonic, setMnemonic] = useState("");
+  const [createdMnemonic, setCreatedMnemonic] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <div className="mx-auto flex h-full max-w-xl items-center p-6">
@@ -71,16 +75,65 @@ export default function OnboardingPage() {
             </div>
           )}
 
+          {createdMnemonic ? (
+            <div className="rounded border border-zinc-200 bg-zinc-50 p-3">
+              <div className="text-xs font-medium text-zinc-700">Your mnemonic</div>
+              <div className="mt-2 whitespace-pre-wrap font-mono text-sm text-zinc-900">
+                {createdMnemonic}
+              </div>
+              <div className="mt-2 text-xs text-zinc-600">
+                Write this down and keep it offline. It will not be shown again.
+              </div>
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="rounded border border-red-200 bg-red-50 p-3 text-sm">
+              {error}
+            </div>
+          ) : null}
+
           <button
             type="button"
             className="w-full rounded bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-            disabled={!password || (mode === "import" && !mnemonic.trim())}
-            onClick={() => {
-              setHasWallet(true);
-              unlock();
+            disabled={
+              loading ||
+              !password ||
+              (mode === "import" && !mnemonic.trim())
+            }
+            onClick={async () => {
+              try {
+                setError(null);
+                setLoading(true);
+
+                if (mode === "create") {
+                  if (!createdMnemonic) {
+                    const res = await api.walletCreate(password);
+                    setCreatedMnemonic(res.mnemonic);
+                    return;
+                  }
+                  setHasWallet(true);
+                  unlock();
+                  return;
+                }
+
+                await api.walletImport(mnemonic.trim(), password);
+                setHasWallet(true);
+                unlock();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Unknown error");
+              } finally {
+                setLoading(false);
+              }
             }}
           >
-            Continue
+            {loading
+              ? "Working..."
+              : mode === "create"
+                ? createdMnemonic
+                  ? "I've backed it up"
+                  : "Create wallet"
+                : "Import wallet"}
           </button>
 
           <div className="text-xs text-zinc-500">

@@ -1,11 +1,31 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::{Aes256Gcm, Nonce};
+use argon2::Argon2;
+use base64::prelude::*;
+use bip39::{Language, Mnemonic};
+use keyring::Entry;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
+use zeroize::Zeroizing;
 
-#[derive(Clone)]
 struct AppState {
     identifier: String,
     version: String,
     os: String,
+}
+
+struct WalletState {
+    keyring_service: String,
+    keyring_username: String,
+    unlocked_seed: Mutex<Option<Zeroizing<Vec<u8>>>>,
+}
+
+impl WalletState {
+    fn entry(&self) -> Result<Entry, String> {
+        Entry::new(&self.keyring_service, &self.keyring_username).map_err(|e| e.to_string())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +110,28 @@ struct BridgeDepositResult {
     tx_id: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WalletStatus {
+    has_wallet: bool,
+    is_unlocked: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WalletCreateResult {
+    mnemonic: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedSeed {
+    kdf: String,
+    salt_b64: String,
+    nonce_b64: String,
+    ciphertext_b64: String,
+}
+
 #[tauri::command]
 fn app_info(state: tauri::State<'_, AppState>) -> AppInfo {
     AppInfo {
@@ -135,6 +177,146 @@ fn bridge_deposit(params: BridgeDepositParams) -> Result<BridgeDepositResult, St
     })
 }
 
+#[tauri::command]
+fn wallet_status(wallet: tauri::State<'_, WalletState>) -> Result<WalletStatus, String> {
+    let entry = wallet.entry()?;
+    let has_wallet = match entry.get_password() {
+        Ok(_) => true,
+        Err(keyring::Error::NoEntry) => false,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    let is_unlocked = wallet
+        .unlocked_seed
+        .lock()
+        .map_err(|_| "Wallet state lock poisoned".to_string())?
+        .is_some();
+
+    Ok(WalletStatus {
+        has_wallet,
+        is_unlocked,
+    })
+}
+
+#[tauri::command]
+fn wallet_create(
+    wallet: tauri::State<'_, WalletState>,
+    password: String,
+) -> Result<WalletCreateResult, String> {
+    let mut rng = rand::thread_rng();
+    let mnemonic = Mnemonic::generate_in_with(&mut rng, Language::English, 24)
+        .map_err(|e| e.to_string())?;
+    let seed = mnemonic.to_seed_normalized("");
+    let enc = encrypt_seed(&seed, &password)?;
+    wallet.entry()?.set_password(&enc).map_err(|e| e.to_string())?;
+
+    let mut guard = wallet
+        .unlocked_seed
+        .lock()
+        .map_err(|_| "Wallet state lock poisoned".to_string())?;
+    *guard = Some(Zeroizing::new(seed.to_vec()));
+
+    Ok(WalletCreateResult {
+        mnemonic: mnemonic.to_string(),
+    })
+}
+
+#[tauri::command]
+fn wallet_import(
+    wallet: tauri::State<'_, WalletState>,
+    mnemonic: String,
+    password: String,
+) -> Result<(), String> {
+    let mnemonic = Mnemonic::parse_in_normalized(Language::English, &mnemonic)
+        .map_err(|e| e.to_string())?;
+    let seed = mnemonic.to_seed_normalized("");
+    let enc = encrypt_seed(&seed, &password)?;
+    wallet.entry()?.set_password(&enc).map_err(|e| e.to_string())?;
+
+    let mut guard = wallet
+        .unlocked_seed
+        .lock()
+        .map_err(|_| "Wallet state lock poisoned".to_string())?;
+    *guard = Some(Zeroizing::new(seed.to_vec()));
+    Ok(())
+}
+
+#[tauri::command]
+fn wallet_unlock(wallet: tauri::State<'_, WalletState>, password: String) -> Result<(), String> {
+    let enc = wallet.entry()?.get_password().map_err(|e| e.to_string())?;
+    let seed = decrypt_seed(&enc, &password)?;
+    let mut guard = wallet
+        .unlocked_seed
+        .lock()
+        .map_err(|_| "Wallet state lock poisoned".to_string())?;
+    *guard = Some(Zeroizing::new(seed));
+    Ok(())
+}
+
+#[tauri::command]
+fn wallet_lock(wallet: tauri::State<'_, WalletState>) -> Result<(), String> {
+    let mut guard = wallet
+        .unlocked_seed
+        .lock()
+        .map_err(|_| "Wallet state lock poisoned".to_string())?;
+    *guard = None;
+    Ok(())
+}
+
+fn encrypt_seed(seed: &[u8], password: &str) -> Result<String, String> {
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+
+    let mut key = [0u8; 32];
+    Argon2::default()
+        .hash_password_into(password.as_bytes(), &salt, &mut key)
+        .map_err(|e| e.to_string())?;
+
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), seed)
+        .map_err(|e| e.to_string())?;
+
+    let payload = EncryptedSeed {
+        kdf: "argon2id+a256gcm".to_string(),
+        salt_b64: BASE64_STANDARD.encode(salt),
+        nonce_b64: BASE64_STANDARD.encode(nonce),
+        ciphertext_b64: BASE64_STANDARD.encode(ciphertext),
+    };
+
+    serde_json::to_string(&payload).map_err(|e| e.to_string())
+}
+
+fn decrypt_seed(payload_json: &str, password: &str) -> Result<Vec<u8>, String> {
+    let payload: EncryptedSeed = serde_json::from_str(payload_json).map_err(|e| e.to_string())?;
+    if payload.kdf != "argon2id+a256gcm" {
+        return Err("Unsupported encrypted payload".to_string());
+    }
+
+    let salt = BASE64_STANDARD
+        .decode(payload.salt_b64)
+        .map_err(|e| e.to_string())?;
+    let nonce = BASE64_STANDARD
+        .decode(payload.nonce_b64)
+        .map_err(|e| e.to_string())?;
+    let ciphertext = BASE64_STANDARD
+        .decode(payload.ciphertext_b64)
+        .map_err(|e| e.to_string())?;
+
+    let mut key = [0u8; 32];
+    Argon2::default()
+        .hash_password_into(password.as_bytes(), &salt, &mut key)
+        .map_err(|e| e.to_string())?;
+
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
+    cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|e| e.to_string())
+}
+
 fn unix_ts() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -156,9 +338,19 @@ pub fn run() {
             version,
             os,
         })
+        .manage(WalletState {
+            keyring_service: ctx.config().identifier.clone(),
+            keyring_username: "wallet_seed".to_string(),
+            unlocked_seed: Mutex::new(None),
+        })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             app_info,
+            wallet_status,
+            wallet_create,
+            wallet_import,
+            wallet_unlock,
+            wallet_lock,
             get_balance,
             list_transactions,
             rescan,
