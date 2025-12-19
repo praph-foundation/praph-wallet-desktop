@@ -53,6 +53,7 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
             encrypted_memo TEXT,\
             amount_minor INTEGER NOT NULL,\
             memo TEXT,\
+            nonce TEXT,\
             received_at INTEGER NOT NULL,\
             nullifier TEXT,\
             spent INTEGER NOT NULL\
@@ -65,6 +66,27 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
         );",
     )
     .map_err(|e| e.to_string())?;
+
+    // Lightweight migration: older wallets may not have the notes.nonce column.
+    // We add it if missing.
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(notes)")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut has_nonce = false;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let name: String = row.get(1).map_err(|e| e.to_string())?;
+            if name == "nonce" {
+                has_nonce = true;
+                break;
+            }
+        }
+        if !has_nonce {
+            conn.execute("ALTER TABLE notes ADD COLUMN nonce TEXT", [])
+                .map_err(|e| e.to_string())?;
+        }
+    }
 
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
@@ -279,20 +301,22 @@ pub fn upsert_note(
     encrypted_memo_hex: &str,
     amount_minor: i64,
     memo: Option<&str>,
+    nonce: Option<&str>,
     received_at: u64,
     nullifier_hex: &str,
     spent: bool,
 ) -> Result<(), String> {
     let conn = open_db(db)?;
     conn.execute(
-        "INSERT INTO notes (commitment, commitment_index, fingerprint, encrypted_memo, amount_minor, memo, received_at, nullifier, spent)\
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)\
+        "INSERT INTO notes (commitment, commitment_index, fingerprint, encrypted_memo, amount_minor, memo, nonce, received_at, nullifier, spent)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)\
          ON CONFLICT(commitment) DO UPDATE SET\
            commitment_index=excluded.commitment_index,\
            fingerprint=excluded.fingerprint,\
            encrypted_memo=excluded.encrypted_memo,\
            amount_minor=excluded.amount_minor,\
            memo=excluded.memo,\
+           nonce=excluded.nonce,\
            received_at=excluded.received_at,\
            nullifier=excluded.nullifier,\
            spent=excluded.spent",
@@ -303,6 +327,7 @@ pub fn upsert_note(
             encrypted_memo_hex,
             amount_minor,
             memo,
+            nonce,
             received_at as i64,
             nullifier_hex,
             if spent { 1i64 } else { 0i64 }

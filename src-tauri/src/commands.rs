@@ -193,6 +193,7 @@ async fn scan_notes_impl(
         }
 
         let memo_str = std::str::from_utf8(&metadata).ok().map(|s| s.to_string());
+        let note_nonce_hex = hex::encode(note_nonce);
 
         let dummy_commitment = fr_from_u64(0);
         let dummy_ivk = IncomingViewingKey::from_bytes([0u8; 32]);
@@ -231,6 +232,7 @@ async fn scan_notes_impl(
             &enc_hex,
             amount_minor,
             memo_str.as_deref(),
+            Some(&note_nonce_hex),
             now,
             &nullifier_hex,
             spent,
