@@ -1,0 +1,65 @@
+import { NavLink, Outlet } from "react-router-dom";
+import { useWalletStore } from "../state/walletStore";
+
+function NavItem({ to, label }: { to: string; label: string }) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        [
+          "block rounded px-3 py-2 text-sm",
+          isActive ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-100",
+        ].join(" ")
+      }
+    >
+      {label}
+    </NavLink>
+  );
+}
+
+export default function AppLayout() {
+  const lockState = useWalletStore((s) => s.lockState);
+  const lock = useWalletStore((s) => s.lock);
+  const unlock = useWalletStore((s) => s.unlock);
+
+  return (
+    <div className="h-full bg-white text-zinc-900">
+      <div className="flex h-full">
+        <aside className="w-60 border-r border-zinc-200 p-4">
+          <div className="mb-4">
+            <div className="text-base font-semibold">Praph Wallet</div>
+            <div className="text-xs text-zinc-500">Official Desktop Wallet</div>
+          </div>
+
+          <nav className="space-y-1">
+            <NavItem to="/" label="Dashboard" />
+            <NavItem to="/send" label="Send" />
+            <NavItem to="/bridge" label="Bridge" />
+            <NavItem to="/receive" label="Receive" />
+            <NavItem to="/settings" label="Settings" />
+          </nav>
+
+          <div className="mt-6 rounded border border-zinc-200 p-3">
+            <div className="text-xs text-zinc-500">Wallet</div>
+            <div className="mt-1 text-sm font-medium">{lockState}</div>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                className="rounded bg-zinc-900 px-3 py-1.5 text-xs text-white"
+                onClick={() => (lockState === "locked" ? unlock() : lock())}
+              >
+                {lockState === "locked" ? "Unlock" : "Lock"}
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-5xl p-6">
+            <Outlet />
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
