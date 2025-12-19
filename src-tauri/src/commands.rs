@@ -8,6 +8,62 @@ use crate::types::{
 use crate::wallet::WalletState;
 use serde::{Deserialize, Serialize};
 
+fn resolve_keys_dir() -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+
+    if let Ok(v) = std::env::var("PRAPH_CLIENT_KEYS_DIR") {
+        if !v.trim().is_empty() {
+            return Ok(PathBuf::from(v));
+        }
+    }
+    if let Ok(v) = std::env::var("PRAPH_KEYS_DIR") {
+        if !v.trim().is_empty() {
+            return Ok(PathBuf::from(v));
+        }
+    }
+
+    // Fallbacks: current working directory ./keys, or sibling PRAPH repo ../PRAPH/keys.
+    let cwd_keys = PathBuf::from("./keys");
+    if cwd_keys.is_dir() {
+        return Ok(cwd_keys);
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let sibling = cwd.join("../PRAPH/keys");
+        if sibling.is_dir() {
+            return Ok(sibling);
+        }
+    }
+
+    Ok(PathBuf::from("./keys"))
+}
+
+fn ensure_client_key_files(keys_dir: &std::path::Path) -> Result<(), String> {
+    let required = [
+        "client_output_params.bin",
+        "client_output_pk.bin",
+        "client_output_vk.bin",
+        "client_spend_params.bin",
+        "client_spend_pk.bin",
+        "client_spend_vk.bin",
+    ];
+    let mut missing = Vec::new();
+    for f in required.iter() {
+        let p = keys_dir.join(f);
+        if !p.is_file() {
+            missing.push(f.to_string());
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "missing proof key files in keys_dir={}: {} (set PRAPH_CLIENT_KEYS_DIR=/path/to/PRAPH/keys)",
+            keys_dir.display(),
+            missing.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn app_info(state: tauri::State<'_, crate::AppState>) -> AppInfo {
     AppInfo {
@@ -431,7 +487,6 @@ pub async fn send_transaction(
     use rand::RngCore;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
-    use std::path::PathBuf;
 
     let tx_id = db::random_id("tx");
 
@@ -657,13 +712,12 @@ pub async fn send_transaction(
         tx_fee: 0,
     };
 
-    let keys_dir = PathBuf::from(
-        std::env::var("PRAPH_CLIENT_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string()),
-    );
+    let keys_dir = resolve_keys_dir()?;
+    ensure_client_key_files(&keys_dir)?;
     let (spend_params, spend_pk, _spend_vk) = load_spend_keys(&keys_dir)
-        .map_err(|e| format!("failed to load spend keys: {e:?}"))?;
+        .map_err(|e| format!("failed to load spend keys (keys_dir={}): {e:?}", keys_dir.display()))?;
     let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir)
-        .map_err(|e| format!("failed to load output keys: {e:?}"))?;
+        .map_err(|e| format!("failed to load output keys (keys_dir={}): {e:?}", keys_dir.display()))?;
 
     let mut action_proofs_json: Vec<serde_json::Value> = Vec::new();
 
@@ -809,7 +863,6 @@ pub async fn mint_dev_faucet(
     use rand::RngCore;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
-    use std::path::PathBuf;
 
     let tx_id = db::random_id("mint");
 
@@ -918,11 +971,10 @@ pub async fn mint_dev_faucet(
     };
     public_inputs.pad_in_place();
 
-    let keys_dir = PathBuf::from(
-        std::env::var("PRAPH_CLIENT_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string()),
-    );
+    let keys_dir = resolve_keys_dir()?;
+    ensure_client_key_files(&keys_dir)?;
     let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir)
-        .map_err(|e| format!("failed to load output keys: {e:?}"))?;
+        .map_err(|e| format!("failed to load output keys (keys_dir={}): {e:?}", keys_dir.display()))?;
 
     let circuit = ClientActionCircuit::from_output_action(
         commitment_root_fr,
