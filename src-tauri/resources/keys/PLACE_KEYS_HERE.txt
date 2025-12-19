@@ -1,0 +1,8 @@
+Place PRAPH proof key files in this directory before building.
+Required:
+- client_output_params.bin
+- client_output_pk.bin
+- client_output_vk.bin
+- client_spend_params.bin
+- client_spend_pk.bin
+- client_spend_vk.bin

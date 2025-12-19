@@ -7,8 +7,9 @@ use crate::types::{
 };
 use crate::wallet::WalletState;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
-fn resolve_keys_dir() -> Result<std::path::PathBuf, String> {
+fn resolve_keys_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
     use std::path::PathBuf;
 
     if let Ok(v) = std::env::var("PRAPH_CLIENT_KEYS_DIR") {
@@ -19,6 +20,21 @@ fn resolve_keys_dir() -> Result<std::path::PathBuf, String> {
     if let Ok(v) = std::env::var("PRAPH_KEYS_DIR") {
         if !v.trim().is_empty() {
             return Ok(PathBuf::from(v));
+        }
+    }
+
+    // Prefer bundled resources/keys when available.
+    if let Some(app) = app {
+        use tauri::path::BaseDirectory;
+        if let Ok(p) = app.path().resolve("keys", BaseDirectory::Resource) {
+            if p.is_dir() {
+                return Ok(p);
+            }
+        }
+        if let Ok(p) = app.path().resolve("resources/keys", BaseDirectory::Resource) {
+            if p.is_dir() {
+                return Ok(p);
+            }
         }
     }
 
@@ -473,6 +489,7 @@ pub fn get_sync_metadata(db: tauri::State<'_, DbState>) -> Result<SyncMetadata, 
 
 #[tauri::command]
 pub async fn send_transaction(
+    app: tauri::AppHandle,
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
     params: SendParams,
@@ -712,7 +729,7 @@ pub async fn send_transaction(
         tx_fee: 0,
     };
 
-    let keys_dir = resolve_keys_dir()?;
+    let keys_dir = resolve_keys_dir(Some(&app))?;
     ensure_client_key_files(&keys_dir)?;
     let (spend_params, spend_pk, _spend_vk) = load_spend_keys(&keys_dir)
         .map_err(|e| format!("failed to load spend keys (keys_dir={}): {e:?}", keys_dir.display()))?;
@@ -849,6 +866,7 @@ pub async fn send_transaction(
 
 #[tauri::command]
 pub async fn mint_dev_faucet(
+    app: tauri::AppHandle,
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
     params: MintDevFaucetParams,
@@ -971,7 +989,7 @@ pub async fn mint_dev_faucet(
     };
     public_inputs.pad_in_place();
 
-    let keys_dir = resolve_keys_dir()?;
+    let keys_dir = resolve_keys_dir(Some(&app))?;
     ensure_client_key_files(&keys_dir)?;
     let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir)
         .map_err(|e| format!("failed to load output keys (keys_dir={}): {e:?}", keys_dir.display()))?;
