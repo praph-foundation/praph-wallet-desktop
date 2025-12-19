@@ -92,7 +92,7 @@ fn decrypt_memo_v1(encrypted: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> 
 }
 
 fn parse_v1_plaintext(plaintext: &[u8]) -> Result<([u8; 32], u128, Vec<u8>), String> {
-    const MAGIC: &[u8; 4] = b"PRPH";
+    const MAGIC: &[u8; 4] = b"PRAF";
     if plaintext.len() < 4 + 1 + 32 + 16 {
         return Err("decrypted memo too short".to_string());
     }
