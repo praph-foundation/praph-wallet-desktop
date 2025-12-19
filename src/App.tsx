@@ -8,6 +8,7 @@ export default function App() {
   const setHasWallet = useWalletStore((s) => s.setHasWallet);
   const lock = useWalletStore((s) => s.lock);
   const unlock = useWalletStore((s) => s.unlock);
+  const theme = useWalletStore((s) => s.theme);
 
   useEffect(() => {
     let mounted = true;
@@ -26,6 +27,11 @@ export default function App() {
       mounted = false;
     };
   }, [lock, setHasWallet, unlock]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.classList.toggle("dark", theme === "dark");
+  }, [theme]);
 
   return (
     <>

@@ -15,10 +15,13 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { Switch } from "../components/ui/switch";
 
 export default function SettingsPage() {
   const helperServiceUrl = useWalletStore((s) => s.helperServiceUrl);
   const setHelperServiceUrl = useWalletStore((s) => s.setHelperServiceUrl);
+  const theme = useWalletStore((s) => s.theme);
+  const setTheme = useWalletStore((s) => s.setTheme);
 
   const [url, setUrl] = useState(helperServiceUrl);
   const [rescanOpen, setRescanOpen] = useState(false);
@@ -57,6 +60,25 @@ export default function SettingsPage() {
                 Save
               </Button>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Theme</CardTitle>
+          <CardDescription>Choose between light and dark mode.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <div className="text-sm font-medium">Dark mode</div>
+              <div className="text-xs text-muted-foreground">Applies immediately and is saved locally.</div>
+            </div>
+            <Switch
+              checked={theme === "dark"}
+              onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+            />
           </div>
         </CardContent>
       </Card>
