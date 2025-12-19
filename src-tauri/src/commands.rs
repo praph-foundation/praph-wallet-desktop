@@ -678,6 +678,7 @@ pub async fn send_transaction(
     );
     let output_commitment = output_note.commitment();
     let output_commitment_bytes = fr_to_bytes(&output_commitment);
+    let output_commitment_hex = hex::encode(output_commitment_bytes);
 
     let mut output_actions = vec![OutputAction {
         note: output_note.clone(),
@@ -1050,6 +1051,46 @@ pub async fn mint_dev_faucet(
         let status = submit_resp.status();
         let text = submit_resp.text().await.unwrap_or_default();
         return Err(format!("prover rejected submission (status {status}): {text}"));
+    }
+
+    // Wait for helper-service to index the minted commitment before scanning.
+    // Otherwise scan_notes may return no notes and the UI won't show updated balance.
+    {
+        use tokio::time::{sleep, Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let resp = http
+                .post(&helper_url)
+                .json(&HelperRequest::GetNoteByCommitment {
+                    commitment: output_commitment_hex.clone(),
+                })
+                .send()
+                .await;
+
+            if let Ok(r) = resp {
+                if let Ok(parsed) = r.json::<HelperResponse>().await {
+                    match parsed {
+                        HelperResponse::GetNoteResult { note } => {
+                            if note.is_some() {
+                                break;
+                            }
+                        }
+                        HelperResponse::Error { message } => {
+                            return Err(format!("helper-service error while waiting for mint indexing: {message}"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "timeout waiting for helper-service to index minted note_commitment={}",
+                    output_commitment_hex
+                ));
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
     }
 
     let _ = scan_notes_impl(&wallet, &db, ScanNotesParams { full_rescan: false }).await?;
