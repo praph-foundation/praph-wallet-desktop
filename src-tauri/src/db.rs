@@ -325,7 +325,7 @@ pub fn upsert_note(
     conn.execute(
         "INSERT INTO notes (commitment, commitment_index, fingerprint, encrypted_memo, amount_minor, memo, nonce, received_at, nullifier, spent)\
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)\
-         ON CONFLICT(commitment) DO UPDATE SET\
+         ON CONFLICT(commitment) DO UPDATE SET \
            commitment_index=excluded.commitment_index,\
            fingerprint=excluded.fingerprint,\
            encrypted_memo=excluded.encrypted_memo,\
