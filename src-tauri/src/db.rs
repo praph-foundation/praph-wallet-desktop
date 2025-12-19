@@ -477,7 +477,7 @@ fn set_setting(db: &DbState, key: &str, value: &str) -> Result<(), String> {
 }
 
 pub fn get_helper_service_url(db: &DbState) -> Result<String, String> {
-    Ok(get_setting(db, "helper_service_url")?.unwrap_or_else(|| "http://localhost:8080".to_string()))
+    Ok(get_setting(db, "helper_service_url")?.unwrap_or_else(|| "http://localhost:8081".to_string()))
 }
 
 pub fn set_helper_service_url(db: &DbState, url: String) -> Result<(), String> {

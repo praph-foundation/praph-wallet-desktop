@@ -98,7 +98,7 @@ function sleep(ms: number): Promise<void> {
 
 let mockUnlocked = true;
 let mockHasWallet = true;
-let mockHelperServiceUrl = "http://localhost:8080";
+let mockHelperServiceUrl = "http://localhost:8081";
 
 let mockBalance: Balance = {
   total: "42.0000 PRAF",
