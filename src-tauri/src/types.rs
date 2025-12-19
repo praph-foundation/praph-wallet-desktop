@@ -120,3 +120,26 @@ pub struct TvkResult {
 pub struct Settings {
     pub helper_service_url: String,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncState {
+    Idle,
+    Syncing,
+    Error,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncMetadata {
+    pub state: SyncState,
+    pub message: Option<String>,
+    pub last_synced_at: Option<u64>,
+    pub last_scanned_height: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanNotesParams {
+    pub full_rescan: bool,
+}

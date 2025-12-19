@@ -1,8 +1,9 @@
 use crate::db;
 use crate::db::DbState;
 use crate::types::{
-    AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, SendParams, SendResult, Settings,
-    TxSummary, WalletCreateResult, WalletStatus, AddressResult,
+    AddressResult, AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, ScanNotesParams,
+    SendParams, SendResult, Settings, SyncMetadata, SyncState, TxSummary, WalletCreateResult,
+    WalletStatus,
 };
 use crate::wallet::WalletState;
 
@@ -27,7 +28,42 @@ pub fn list_transactions(db: tauri::State<'_, DbState>) -> Result<Vec<TxSummary>
 
 #[tauri::command]
 pub fn rescan(db: tauri::State<'_, DbState>) -> Result<(), String> {
+    let _ = scan_notes_impl(&db, ScanNotesParams { full_rescan: true })?;
     db::confirm_pending(&db)
+}
+
+fn scan_notes_impl(db: &DbState, params: ScanNotesParams) -> Result<SyncMetadata, String> {
+    let helper = db::get_helper_service_url(db)?;
+    let current = db::get_sync_metadata(db)?;
+
+    let syncing = SyncMetadata {
+        state: SyncState::Syncing,
+        message: Some(format!("Syncing via {helper}")),
+        last_synced_at: current.last_synced_at,
+        last_scanned_height: current.last_scanned_height,
+    };
+    db::set_sync_metadata(db, &syncing)?;
+
+    let prev_height = current.last_scanned_height.unwrap_or(0);
+    let next_height = if params.full_rescan { 0 } else { prev_height.saturating_add(1) };
+    let done = SyncMetadata {
+        state: SyncState::Idle,
+        message: None,
+        last_synced_at: Some(crate::unix_ts()),
+        last_scanned_height: Some(next_height),
+    };
+    db::set_sync_metadata(db, &done)?;
+    Ok(done)
+}
+
+#[tauri::command]
+pub fn scan_notes(db: tauri::State<'_, DbState>, params: ScanNotesParams) -> Result<SyncMetadata, String> {
+    scan_notes_impl(&db, params)
+}
+
+#[tauri::command]
+pub fn get_sync_metadata(db: tauri::State<'_, DbState>) -> Result<SyncMetadata, String> {
+    db::get_sync_metadata(&db)
 }
 
 #[tauri::command]

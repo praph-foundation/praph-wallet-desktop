@@ -55,6 +55,8 @@ pub fn run() {
             commands::get_balance,
             commands::list_transactions,
             commands::rescan,
+            commands::scan_notes,
+            commands::get_sync_metadata,
             commands::send_transaction,
             commands::bridge_deposit,
             commands::generate_address,

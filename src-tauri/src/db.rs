@@ -1,4 +1,4 @@
-use crate::types::{Balance, TxDirection, TxStatus, TxSummary};
+use crate::types::{Balance, SyncMetadata, SyncState, TxDirection, TxStatus, TxSummary};
 use directories::ProjectDirs;
 use rand::RngCore;
 use rusqlite::{params, Connection};
@@ -296,4 +296,54 @@ pub fn get_receive_address(db: &DbState) -> Result<Option<String>, String> {
 
 pub fn set_receive_address(db: &DbState, address: String) -> Result<(), String> {
     set_setting(db, "receive_address", &address)
+}
+
+pub fn get_sync_metadata(db: &DbState) -> Result<SyncMetadata, String> {
+    let state = match get_setting(db, "sync_state")?.as_deref() {
+        Some("syncing") => SyncState::Syncing,
+        Some("error") => SyncState::Error,
+        _ => SyncState::Idle,
+    };
+    let message = get_setting(db, "sync_message")?.and_then(|m| {
+        if m.is_empty() {
+            None
+        } else {
+            Some(m)
+        }
+    });
+    let last_synced_at = get_setting(db, "last_synced_at")?
+        .and_then(|v| v.parse::<u64>().ok());
+    let last_scanned_height = get_setting(db, "last_scanned_height")?
+        .and_then(|v| v.parse::<u64>().ok());
+
+    Ok(SyncMetadata {
+        state,
+        message,
+        last_synced_at,
+        last_scanned_height,
+    })
+}
+
+pub fn set_sync_metadata(db: &DbState, meta: &SyncMetadata) -> Result<(), String> {
+    let state = match meta.state {
+        SyncState::Idle => "idle",
+        SyncState::Syncing => "syncing",
+        SyncState::Error => "error",
+    };
+    set_setting(db, "sync_state", state)?;
+
+    if let Some(m) = &meta.message {
+        set_setting(db, "sync_message", m)?;
+    } else {
+        set_setting(db, "sync_message", "")?;
+    }
+
+    if let Some(ts) = meta.last_synced_at {
+        set_setting(db, "last_synced_at", &ts.to_string())?;
+    }
+    if let Some(h) = meta.last_scanned_height {
+        set_setting(db, "last_scanned_height", &h.to_string())?;
+    }
+
+    Ok(())
 }

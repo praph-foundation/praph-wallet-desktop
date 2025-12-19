@@ -135,7 +135,7 @@ export default function SettingsPage() {
                     try {
                       setSyncStatus("syncing", "Rescanning...");
                       setRescanRunning(true);
-                      await api.rescan();
+                      await api.scanNotes({ fullRescan: true });
                       await qc.invalidateQueries({ queryKey: ["balance"] });
                       await qc.invalidateQueries({ queryKey: ["transactions"] });
                       toast.success("Rescan completed");

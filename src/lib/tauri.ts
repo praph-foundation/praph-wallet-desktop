@@ -65,6 +65,19 @@ export interface Settings {
   helperServiceUrl: string;
 }
 
+export type SyncState = "idle" | "syncing" | "error";
+
+export interface SyncMetadata {
+  state: SyncState;
+  message?: string;
+  lastSyncedAt?: number;
+  lastScannedHeight?: number;
+}
+
+export interface ScanNotesParams {
+  fullRescan: boolean;
+}
+
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && Boolean((window as any).__TAURI__);
 }
@@ -127,6 +140,9 @@ const tauriApi = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setHelperServiceUrl: (url: string) => invoke<void>("set_helper_service_url", { url }),
+
+  getSyncMetadata: () => invoke<SyncMetadata>("get_sync_metadata"),
+  scanNotes: (params: ScanNotesParams) => invoke<SyncMetadata>("scan_notes", { params }),
 };
 
 const mockApi = {
@@ -229,6 +245,15 @@ const mockApi = {
   setHelperServiceUrl: async (url: string): Promise<void> => {
     mockHelperServiceUrl = url;
     await sleep(50);
+  },
+
+  getSyncMetadata: async (): Promise<SyncMetadata> => {
+    await sleep(50);
+    return { state: "idle" };
+  },
+  scanNotes: async (_params: ScanNotesParams): Promise<SyncMetadata> => {
+    await sleep(300);
+    return { state: "idle", lastSyncedAt: Math.floor(Date.now() / 1000) };
   },
 };
 
