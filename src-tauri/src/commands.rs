@@ -963,13 +963,24 @@ pub async fn mint_dev_faucet(
     let output_commitment_hex = hex::encode(output_commitment_bytes);
     let fingerprint_hex = hex::encode(to_fvk.fingerprint());
 
-    // Assume mint inserts at index 0 for dev testnet flows (fresh chain).
+    // NOTE: This dev faucet mint implementation currently only supports the
+    // first insertion (commitment index 0) on a fresh chain, because the wallet
+    // does not yet have output insertion witnesses for arbitrary indices.
     let mut empty_roots = Vec::with_capacity(MERKLE_TREE_DEPTH + 1);
     empty_roots.push(empty_leaf());
     for i in 0..MERKLE_TREE_DEPTH {
         let prev = empty_roots[i];
         empty_roots.push(poseidon_hash_two(&prev, &prev));
     }
+
+    let empty_commitment_root = empty_roots[MERKLE_TREE_DEPTH];
+    if commitment_root_fr != empty_commitment_root {
+        return Err(format!(
+            "dev faucet mint currently requires a fresh chain (empty commitment tree). Current commitment_root={} . Restart testnet (purge) and try again.",
+            hex::encode(fr_to_bytes(&commitment_root_fr))
+        ));
+    }
+
     let mut next_commitment_root_fr = poseidon_hash_two(&output_commitment, &empty_leaf());
     for level in 1..MERKLE_TREE_DEPTH {
         next_commitment_root_fr = poseidon_hash_two(&next_commitment_root_fr, &empty_roots[level]);
@@ -1058,7 +1069,7 @@ pub async fn mint_dev_faucet(
     // Wait for helper-service to index the minted commitment before scanning.
     // Otherwise scan_notes may return no notes and the UI won't show updated balance.
     {
-        use std::time::{Duration, Instant};
+        use tokio::time::{sleep, Duration, Instant};
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let resp = http
@@ -1091,7 +1102,7 @@ pub async fn mint_dev_faucet(
                     output_commitment_hex
                 ));
             }
-            tauri::async_runtime::sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(2)).await;
         }
     }
 
