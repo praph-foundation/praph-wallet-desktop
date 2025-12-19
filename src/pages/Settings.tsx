@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/tauri";
 import { useWalletStore } from "../state/walletStore";
 import { toast } from "sonner";
@@ -18,6 +19,7 @@ import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 
 export default function SettingsPage() {
+  const qc = useQueryClient();
   const helperServiceUrl = useWalletStore((s) => s.helperServiceUrl);
   const setHelperServiceUrl = useWalletStore((s) => s.setHelperServiceUrl);
   const theme = useWalletStore((s) => s.theme);
@@ -113,6 +115,8 @@ export default function SettingsPage() {
                       setSyncStatus("syncing", "Rescanning...");
                       setRescanRunning(true);
                       await api.rescan();
+                      await qc.invalidateQueries({ queryKey: ["balance"] });
+                      await qc.invalidateQueries({ queryKey: ["transactions"] });
                       toast.success("Rescan completed");
                       setSyncStatus("idle", null);
                       setRescanOpen(false);
