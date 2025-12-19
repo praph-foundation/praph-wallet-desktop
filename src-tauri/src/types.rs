@@ -64,6 +64,14 @@ pub struct BridgeDepositParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MintDevFaucetParams {
+    pub amount: String,
+    pub memo: Option<String>,
+    pub prover_tip: ProverTip,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ProverTip {
     Low,
     Medium,
@@ -79,6 +87,12 @@ pub struct SendResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeDepositResult {
+    pub tx_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MintDevFaucetResult {
     pub tx_id: String,
 }
 

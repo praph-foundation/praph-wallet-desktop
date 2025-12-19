@@ -48,6 +48,16 @@ export interface BridgeDepositResult {
   txId: string;
 }
 
+export interface MintDevFaucetParams {
+  amount: string;
+  memo?: string;
+  proverTip: "low" | "medium" | "high";
+}
+
+export interface MintDevFaucetResult {
+  txId: string;
+}
+
 export interface WalletStatus {
   hasWallet: boolean;
   isUnlocked: boolean;
@@ -124,6 +134,8 @@ const tauriApi = {
   listTransactions: () => invoke<TxSummary[]>("list_transactions"),
   rescan: () => invoke<void>("rescan"),
   sendTransaction: (params: SendParams) => invoke<SendResult>("send_transaction", { params }),
+  mintDevFaucet: (params: MintDevFaucetParams) =>
+    invoke<MintDevFaucetResult>("mint_dev_faucet", { params }),
   bridgeDeposit: (params: BridgeDepositParams) =>
     invoke<BridgeDepositResult>("bridge_deposit", { params }),
 
@@ -197,6 +209,13 @@ const mockApi = {
     await sleep(100);
     throw new Error(
       "sendTransaction is only available in the Tauri desktop app (backend required)"
+    );
+  },
+
+  mintDevFaucet: async (_params: MintDevFaucetParams): Promise<MintDevFaucetResult> => {
+    await sleep(100);
+    throw new Error(
+      "mintDevFaucet is only available in the Tauri desktop app (backend required)"
     );
   },
 

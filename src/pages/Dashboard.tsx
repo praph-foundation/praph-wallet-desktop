@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/tauri";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, MintDevFaucetParams } from "../lib/tauri";
 import { toast } from "sonner";
 import {
   Card,
@@ -24,11 +24,17 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 
 export default function DashboardPage() {
+  const qc = useQueryClient();
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
   const [tvkOpen, setTvkOpen] = useState(false);
   const [tvkPassword, setTvkPassword] = useState("");
   const [tvkRunning, setTvkRunning] = useState(false);
   const [tvk, setTvk] = useState<string | null>(null);
+
+  const [mintOpen, setMintOpen] = useState(false);
+  const [mintAmount, setMintAmount] = useState("");
+  const [mintMemo, setMintMemo] = useState("");
+  const [mintTip, setMintTip] = useState<MintDevFaucetParams["proverTip"]>("low");
 
   const appInfoQuery = useQuery({
     queryKey: ["appInfo"],
@@ -43,6 +49,21 @@ export default function DashboardPage() {
   const txsQuery = useQuery({
     queryKey: ["transactions"],
     queryFn: api.listTransactions,
+  });
+
+  const mintMutation = useMutation({
+    mutationFn: (p: MintDevFaucetParams) => api.mintDevFaucet(p),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["balance"] });
+      await qc.invalidateQueries({ queryKey: ["transactions"] });
+      toast.success("Mint submitted");
+      setMintOpen(false);
+      setMintAmount("");
+      setMintMemo("");
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Mint failed");
+    },
   });
 
   const selectedTx = (txsQuery.data ?? []).find((t) => t.id === selectedTxId) ?? null;
@@ -92,6 +113,77 @@ export default function DashboardPage() {
           </CardHeader>
         </Card>
       </section>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Dev Faucet</CardTitle>
+          <CardDescription>Mint test funds on local dev testnet.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Dialog open={mintOpen} onOpenChange={setMintOpen}>
+            <Button onClick={() => setMintOpen(true)} disabled={mintMutation.isPending}>
+              Mint
+            </Button>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Mint via Dev Faucet</DialogTitle>
+                <DialogDescription>
+                  This requires prover-aggregator started with dev faucet enabled.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="mintAmount">Amount (PRAF)</Label>
+                  <Input
+                    id="mintAmount"
+                    value={mintAmount}
+                    onChange={(e) => setMintAmount(e.target.value)}
+                    placeholder="e.g. 10.0000"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="mintMemo">Memo</Label>
+                  <Input
+                    id="mintMemo"
+                    value={mintMemo}
+                    onChange={(e) => setMintMemo(e.target.value)}
+                    placeholder="optional"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="mintTip">Prover tip</Label>
+                  <Input
+                    id="mintTip"
+                    value={mintTip}
+                    onChange={(e) =>
+                      setMintTip(e.target.value as MintDevFaucetParams["proverTip"])
+                    }
+                    placeholder="low | medium | high"
+                  />
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button
+                  onClick={() =>
+                    mintMutation.mutate({
+                      amount: mintAmount,
+                      memo: mintMemo || undefined,
+                      proverTip: mintTip,
+                    })
+                  }
+                  disabled={!mintAmount || mintMutation.isPending}
+                >
+                  Submit
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

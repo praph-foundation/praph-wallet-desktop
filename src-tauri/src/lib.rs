@@ -58,6 +58,7 @@ pub fn run() {
             commands::scan_notes,
             commands::get_sync_metadata,
             commands::send_transaction,
+            commands::mint_dev_faucet,
             commands::bridge_deposit,
             commands::generate_address,
             commands::export_viewing_keys,

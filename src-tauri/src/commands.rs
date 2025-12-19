@@ -2,8 +2,8 @@ use crate::db;
 use crate::db::DbState;
 use crate::types::{
     AddressResult, AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, ScanNotesParams,
-    SendParams, SendResult, Settings, SyncMetadata, SyncState, TxSummary, WalletCreateResult,
-    WalletStatus,
+    MintDevFaucetParams, MintDevFaucetResult, SendParams, SendResult, Settings, SyncMetadata,
+    SyncState, TxSummary, WalletCreateResult, WalletStatus,
 };
 use crate::wallet::WalletState;
 use serde::{Deserialize, Serialize};
@@ -791,6 +791,199 @@ pub async fn send_transaction(
     db::mark_notes_spent(&db, &spent_commitments)?;
 
     Ok(SendResult { tx_id })
+}
+
+#[tauri::command]
+pub async fn mint_dev_faucet(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    params: MintDevFaucetParams,
+) -> Result<MintDevFaucetResult, String> {
+    use praph_circuits::action::OutputAction;
+    use praph_circuits::hash::{fr_from_bytes, fr_to_bytes, poseidon_hash_two};
+    use praph_circuits::inputs::{ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES};
+    use praph_circuits::keys::SpendingKey;
+    use praph_circuits::merkle::{empty_leaf, MERKLE_TREE_DEPTH};
+    use praph_circuits::note::Note;
+    use praph_circuits::halo2::enabled::{create_client_action_proof, load_output_keys, ClientActionCircuit};
+    use rand::RngCore;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+    use std::path::PathBuf;
+
+    let tx_id = db::random_id("mint");
+
+    let amount_display = if params.amount.contains(' ') {
+        params.amount.clone()
+    } else {
+        format!("{} PRAF", params.amount)
+    };
+    let amount_minor_i64 = parse_amount_minor(&amount_display);
+    if amount_minor_i64 <= 0 {
+        return Err("amount must be positive".to_string());
+    }
+    let amount_minor_u128 = amount_minor_i64 as u128;
+
+    let spending_key_bytes = {
+        let guard = wallet
+            .unlocked_seed
+            .lock()
+            .map_err(|_| "Wallet state lock poisoned".to_string())?;
+        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
+        if seed.len() < 32 {
+            return Err("Seed too short".to_string());
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&seed[..32]);
+        out
+    };
+    let to_sk = SpendingKey::from_bytes(spending_key_bytes);
+    let to_fvk = to_sk.derive_full_viewing_key();
+
+    let helper = db::get_helper_service_url(&db)?;
+    let helper_url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
+    let http = reqwest::Client::new();
+
+    let roots_resp = http
+        .post(&helper_url)
+        .json(&HelperRequest::GetStateRoots)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let roots_resp: HelperResponse = roots_resp.json().await.map_err(|e| e.to_string())?;
+    let (commitment_root_bytes, nullifier_root_bytes) = match roots_resp {
+        HelperResponse::StateRootsResult {
+            commitment_root,
+            nullifier_root,
+        } => {
+            let c = hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            let n = hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            if c.len() != 32 || n.len() != 32 {
+                return Err("invalid state roots".to_string());
+            }
+            let mut c_arr = [0u8; 32];
+            c_arr.copy_from_slice(&c);
+            let mut n_arr = [0u8; 32];
+            n_arr.copy_from_slice(&n);
+            (c_arr, n_arr)
+        }
+        HelperResponse::Error { message } => return Err(message),
+        _ => return Err("unexpected helper response".to_string()),
+    };
+
+    let commitment_root_fr = fr_from_bytes(&commitment_root_bytes);
+    let nullifier_root_fr = fr_from_bytes(&nullifier_root_bytes);
+
+    let mut rng = ChaCha20Rng::from_entropy();
+    let mut note_nonce = [0u8; 32];
+    rng.fill_bytes(&mut note_nonce);
+
+    let recipient_commitment = fr_from_bytes(&spending_key_bytes);
+    let output_note = Note::new(
+        to_sk,
+        to_fvk.incoming().clone(),
+        amount_minor_u128,
+        recipient_commitment,
+        note_nonce,
+    );
+    let output_commitment = output_note.commitment();
+    let output_commitment_bytes = fr_to_bytes(&output_commitment);
+
+    // Assume mint inserts at index 0 for dev testnet flows (fresh chain).
+    let mut empty_roots = Vec::with_capacity(MERKLE_TREE_DEPTH + 1);
+    empty_roots.push(empty_leaf());
+    for i in 0..MERKLE_TREE_DEPTH {
+        let prev = empty_roots[i];
+        empty_roots.push(poseidon_hash_two(&prev, &prev));
+    }
+    let mut next_commitment_root_fr = poseidon_hash_two(&output_commitment, &empty_leaf());
+    for level in 1..MERKLE_TREE_DEPTH {
+        next_commitment_root_fr = poseidon_hash_two(&next_commitment_root_fr, &empty_roots[level]);
+    }
+
+    let output_action = OutputAction {
+        note: output_note.clone(),
+        enabled: true,
+    };
+
+    let encrypted_l2_message = vec![0u8; MAX_ENCRYPTED_MESSAGE_BYTES];
+    let mut public_inputs = ClientPublicInputs {
+        commitment_root: commitment_root_fr,
+        nullifier_root: nullifier_root_fr,
+        next_commitment_root: next_commitment_root_fr,
+        next_nullifier_root: nullifier_root_fr,
+        spend_nullifiers: vec![],
+        output_commitments: vec![output_commitment],
+        encrypted_l2_message: encrypted_l2_message.clone(),
+    };
+    public_inputs.pad_in_place();
+
+    let keys_dir = PathBuf::from(
+        std::env::var("PRAPH_CLIENT_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string()),
+    );
+    let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir)
+        .map_err(|e| format!("failed to load output keys: {e:?}"))?;
+
+    let circuit = ClientActionCircuit::from_output_action(
+        commitment_root_fr,
+        nullifier_root_fr,
+        next_commitment_root_fr,
+        output_action,
+    );
+    let proof = create_client_action_proof(&output_params, &output_pk, &circuit, &mut rng)
+        .map_err(|e| format!("failed to generate output proof: {e:?}"))?;
+
+    let memo_text = params.memo.clone().unwrap_or_default();
+    let memo_plaintext = build_v1_plaintext(&note_nonce, amount_minor_u128, memo_text.as_bytes());
+    let mut memo_nonce = [0u8; 12];
+    rng.fill_bytes(&mut memo_nonce);
+    let encrypted_memo = encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
+
+    let public_inputs_json = serde_json::json!({
+        "commitment_root": hex::encode(fr_to_bytes(&public_inputs.commitment_root)),
+        "nullifier_root": hex::encode(fr_to_bytes(&public_inputs.nullifier_root)),
+        "next_commitment_root": hex::encode(fr_to_bytes(&public_inputs.next_commitment_root)),
+        "next_nullifier_root": hex::encode(fr_to_bytes(&public_inputs.next_nullifier_root)),
+        "spend_nullifiers": public_inputs.spend_nullifiers.iter().map(|n| hex::encode(fr_to_bytes(n))).collect::<Vec<_>>(),
+        "output_commitments": public_inputs.output_commitments.iter().map(|c| hex::encode(fr_to_bytes(c))).collect::<Vec<_>>(),
+        "encrypted_l2_message": hex::encode(&public_inputs.encrypted_l2_message),
+    });
+
+    let output_memos_json = vec![serde_json::json!({
+        "note_commitment": hex::encode(output_commitment_bytes),
+        "fingerprint": hex::encode(to_fvk.fingerprint()),
+        "memo": hex::encode(encrypted_memo),
+    })];
+
+    let prover_tip = match params.prover_tip {
+        crate::types::ProverTip::Low => 0u128,
+        crate::types::ProverTip::Medium => 1u128,
+        crate::types::ProverTip::High => 3u128,
+    };
+
+    let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:9091".to_string());
+    let submit_request = serde_json::json!({
+        "proof": hex::encode(&proof),
+        "public_inputs": public_inputs_json,
+        "output_memos": output_memos_json,
+        "prover_tip": prover_tip,
+        "dev_faucet": true,
+    });
+    let submit_resp = http
+        .post(format!("{}/submit", prover_url.trim_end_matches('/')))
+        .json(&submit_request)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !submit_resp.status().is_success() {
+        let status = submit_resp.status();
+        let text = submit_resp.text().await.unwrap_or_default();
+        return Err(format!("prover rejected submission (status {status}): {text}"));
+    }
+
+    let _ = scan_notes_impl(&wallet, &db, ScanNotesParams { full_rescan: false }).await?;
+    Ok(MintDevFaucetResult { tx_id })
 }
 
 #[tauri::command]
