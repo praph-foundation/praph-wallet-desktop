@@ -1,8 +1,16 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { api } from "../lib/tauri";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Textarea } from "../components/ui/textarea";
 import { useWalletStore } from "../state/walletStore";
 
 export default function OnboardingPage() {
+  const navigate = useNavigate();
   const setHasWallet = useWalletStore((s) => s.setHasWallet);
   const unlock = useWalletStore((s) => s.unlock);
 
@@ -13,134 +21,138 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const canSubmit =
+    !loading &&
+    Boolean(password) &&
+    (mode === "create" ? true : Boolean(mnemonic.trim()));
+
   return (
     <div className="mx-auto flex h-full max-w-xl items-center p-6">
-      <div className="w-full rounded-lg border border-zinc-200 bg-white p-6">
-        <div className="text-lg font-semibold">Praph Wallet</div>
-        <div className="mt-1 text-sm text-zinc-600">
-          Security-first wallet for PRAPH ZK-UTXO assets.
-        </div>
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle>Praph Wallet</CardTitle>
+          <CardDescription>Security-first wallet for PRAPH ZK-UTXO assets.</CardDescription>
+        </CardHeader>
 
-        <div className="mt-6 flex gap-2">
-          <button
-            type="button"
-            className={
-              mode === "create"
-                ? "rounded bg-zinc-900 px-3 py-1.5 text-sm text-white"
-                : "rounded border border-zinc-200 px-3 py-1.5 text-sm"
-            }
-            onClick={() => setMode("create")}
-          >
-            Create
-          </button>
-          <button
-            type="button"
-            className={
-              mode === "import"
-                ? "rounded bg-zinc-900 px-3 py-1.5 text-sm text-white"
-                : "rounded border border-zinc-200 px-3 py-1.5 text-sm"
-            }
-            onClick={() => setMode("import")}
-          >
-            Import
-          </button>
-        </div>
-
-        <div className="mt-6 space-y-3">
-          <label className="block">
-            <div className="text-xs font-medium text-zinc-700">Password</div>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.currentTarget.value)}
-              className="mt-1 w-full rounded border border-zinc-200 px-3 py-2 text-sm"
-              placeholder="Set a strong password"
-            />
-          </label>
-
-          {mode === "import" ? (
-            <label className="block">
-              <div className="text-xs font-medium text-zinc-700">Mnemonic</div>
-              <textarea
-                value={mnemonic}
-                onChange={(e) => setMnemonic(e.currentTarget.value)}
-                className="mt-1 w-full rounded border border-zinc-200 px-3 py-2 text-sm"
-                rows={3}
-                placeholder="Enter your BIP-39 mnemonic"
-              />
-            </label>
-          ) : (
-            <div className="rounded border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
-              Wallet creation flow will generate a BIP-39 mnemonic and guide you to back it up.
-            </div>
-          )}
-
-          {createdMnemonic ? (
-            <div className="rounded border border-zinc-200 bg-zinc-50 p-3">
-              <div className="text-xs font-medium text-zinc-700">Your mnemonic</div>
-              <div className="mt-2 whitespace-pre-wrap font-mono text-sm text-zinc-900">
-                {createdMnemonic}
-              </div>
-              <div className="mt-2 text-xs text-zinc-600">
-                Write this down and keep it offline. It will not be shown again.
-              </div>
-            </div>
-          ) : null}
-
-          {error ? (
-            <div className="rounded border border-red-200 bg-red-50 p-3 text-sm">
-              {error}
-            </div>
-          ) : null}
-
-          <button
-            type="button"
-            className="w-full rounded bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-            disabled={
-              loading ||
-              !password ||
-              (mode === "import" && !mnemonic.trim())
-            }
-            onClick={async () => {
-              try {
+        <CardContent>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={mode === "create" ? "default" : "outline"}
+              onClick={() => {
+                setMode("create");
+                setCreatedMnemonic(null);
                 setError(null);
-                setLoading(true);
+              }}
+            >
+              Create
+            </Button>
+            <Button
+              type="button"
+              variant={mode === "import" ? "default" : "outline"}
+              onClick={() => {
+                setMode("import");
+                setCreatedMnemonic(null);
+                setError(null);
+              }}
+            >
+              Import
+            </Button>
+          </div>
 
-                if (mode === "create") {
-                  if (!createdMnemonic) {
-                    const res = await api.walletCreate(password);
-                    setCreatedMnemonic(res.mnemonic);
+          <div className="mt-6 space-y-4">
+            <div className="space-y-2">
+              <Label>Password</Label>
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                placeholder={mode === "create" ? "Set a strong password" : "Your wallet password"}
+              />
+              <div className="text-xs text-muted-foreground">
+                Password encrypts the seed stored in your OS keychain.
+              </div>
+            </div>
+
+            {mode === "import" ? (
+              <div className="space-y-2">
+                <Label>Mnemonic</Label>
+                <Textarea
+                  value={mnemonic}
+                  onChange={(e) => setMnemonic(e.currentTarget.value)}
+                  rows={3}
+                  placeholder="Enter your BIP-39 mnemonic"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Never paste your mnemonic into untrusted apps. Use this only on your own machine.
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+                Create will generate a new BIP-39 mnemonic. You must back it up offline.
+              </div>
+            )}
+
+            {createdMnemonic ? (
+              <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                <div className="text-xs font-medium text-muted-foreground">Your mnemonic</div>
+                <div className="whitespace-pre-wrap font-mono text-sm">{createdMnemonic}</div>
+                <div className="text-xs text-muted-foreground">
+                  Write this down and keep it offline. It will not be shown again.
+                </div>
+              </div>
+            ) : null}
+
+            {error ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm">
+                {error}
+              </div>
+            ) : null}
+
+            <Button
+              className="w-full"
+              disabled={!canSubmit}
+              onClick={async () => {
+                try {
+                  setError(null);
+                  setLoading(true);
+
+                  if (mode === "create") {
+                    if (!createdMnemonic) {
+                      const res = await api.walletCreate(password);
+                      setCreatedMnemonic(res.mnemonic);
+                      toast.success("Wallet created");
+                      return;
+                    }
+                    setHasWallet(true);
+                    unlock();
+                    navigate("/", { replace: true });
                     return;
                   }
+
+                  await api.walletImport(mnemonic.trim(), password);
+                  toast.success("Wallet imported");
                   setHasWallet(true);
                   unlock();
-                  return;
+                  navigate("/", { replace: true });
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Unknown error");
+                } finally {
+                  setLoading(false);
                 }
-
-                await api.walletImport(mnemonic.trim(), password);
-                setHasWallet(true);
-                unlock();
-              } catch (e) {
-                setError(e instanceof Error ? e.message : "Unknown error");
-              } finally {
-                setLoading(false);
-              }
-            }}
-          >
-            {loading
-              ? "Working..."
-              : mode === "create"
-                ? createdMnemonic
-                  ? "I've backed it up"
-                  : "Create wallet"
-                : "Import wallet"}
-          </button>
-
-          <div className="text-xs text-zinc-500">
-            This is a UI skeleton. Backend key management and rescan will be wired next.
+              }}
+            >
+              {loading
+                ? "Working..."
+                : mode === "create"
+                  ? createdMnemonic
+                    ? "I've backed it up"
+                    : "Create wallet"
+                  : "Import wallet"}
+            </Button>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
