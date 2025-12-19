@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import {
@@ -10,6 +9,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../components/ui/dialog";
+import CopyButton from "../components/CopyButton";
 
 export default function ReceivePage() {
   const address = "praph1q9d2...demo-address";
@@ -36,18 +36,7 @@ export default function ReceivePage() {
             </div>
 
             <div className="flex gap-2">
-              <Button
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(address);
-                    toast.success("Copied address");
-                  } catch {
-                    toast.error("Failed to copy");
-                  }
-                }}
-              >
-                Copy
-              </Button>
+              <CopyButton value={address} label="Copy" successMessage="Copied address" />
               <Dialog open={qrOpen} onOpenChange={setQrOpen}>
                 <DialogTrigger asChild>
                   <Button variant="outline">Show QR</Button>
@@ -67,18 +56,7 @@ export default function ReceivePage() {
                     <div className="rounded-md border border-border bg-muted/30 p-3">
                       <div className="break-all font-mono text-xs">{address}</div>
                     </div>
-                    <Button
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(address);
-                          toast.success("Copied address");
-                        } catch {
-                          toast.error("Failed to copy");
-                        }
-                      }}
-                    >
-                      Copy address
-                    </Button>
+                    <CopyButton value={address} label="Copy address" successMessage="Copied address" />
                   </div>
                 </DialogContent>
               </Dialog>

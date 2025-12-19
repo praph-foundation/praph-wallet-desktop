@@ -16,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
+import CopyButton from "../components/CopyButton";
 
 export default function DashboardPage() {
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
@@ -150,7 +151,15 @@ export default function DashboardPage() {
               </div>
               <div className="space-y-1">
                 <div className="text-muted-foreground">TxID</div>
-                <div className="break-all font-mono text-xs">{selectedTx.id}</div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="break-all font-mono text-xs">{selectedTx.id}</div>
+                  <CopyButton
+                    value={selectedTx.id}
+                    label="Copy"
+                    successMessage="Copied TxID"
+                    className="shrink-0"
+                  />
+                </div>
               </div>
               <div className="space-y-1">
                 <div className="text-muted-foreground">Timestamp</div>

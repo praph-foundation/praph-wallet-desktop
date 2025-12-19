@@ -4,6 +4,7 @@ import { api, SendParams } from "../lib/tauri";
 import { toast } from "sonner";
 import { useWalletStore } from "../state/walletStore";
 import { Badge } from "../components/ui/badge";
+import CopyButton from "../components/CopyButton";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import {
@@ -232,7 +233,12 @@ export default function SendPage() {
 
             {sendMutation.data ? (
               <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
-                Submitted. TxID: <span className="font-mono">{sendMutation.data.txId}</span>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    Submitted. TxID: <span className="font-mono">{sendMutation.data.txId}</span>
+                  </div>
+                  <CopyButton value={sendMutation.data.txId} label="Copy" successMessage="Copied TxID" className="shrink-0" />
+                </div>
               </div>
             ) : null}
           </div>
