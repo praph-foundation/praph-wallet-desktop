@@ -17,6 +17,7 @@ import {
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
+import CopyButton from "../components/CopyButton";
 
 export default function SettingsPage() {
   const qc = useQueryClient();
@@ -29,6 +30,13 @@ export default function SettingsPage() {
   const [url, setUrl] = useState(helperServiceUrl);
   const [rescanOpen, setRescanOpen] = useState(false);
   const [rescanRunning, setRescanRunning] = useState(false);
+
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportPassword, setExportPassword] = useState("");
+  const [exportRunning, setExportRunning] = useState(false);
+  const [viewingKeys, setViewingKeys] = useState<
+    { fvk: string; ivk: string; ovk: string } | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,9 +174,92 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="outline" disabled>
-            Export viewing keys (coming soon)
-          </Button>
+          <Dialog
+            open={exportOpen}
+            onOpenChange={(open) => {
+              setExportOpen(open);
+              if (!open) {
+                setExportPassword("");
+                setViewingKeys(null);
+                setExportRunning(false);
+              }
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button variant="outline">Export viewing keys</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Export viewing keys</DialogTitle>
+                <DialogDescription>Enter your wallet password to reveal viewing keys.</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Password</Label>
+                  <Input
+                    type="password"
+                    value={exportPassword}
+                    onChange={(e) => setExportPassword(e.currentTarget.value)}
+                    placeholder="Your password"
+                  />
+                </div>
+
+                {viewingKeys ? (
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">FVK</div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="break-all font-mono text-xs">{viewingKeys.fvk}</div>
+                        <CopyButton value={viewingKeys.fvk} label="Copy" successMessage="Copied FVK" />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">IVK</div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="break-all font-mono text-xs">{viewingKeys.ivk}</div>
+                        <CopyButton value={viewingKeys.ivk} label="Copy" successMessage="Copied IVK" />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">OVK</div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="break-all font-mono text-xs">{viewingKeys.ovk}</div>
+                        <CopyButton value={viewingKeys.ovk} label="Copy" successMessage="Copied OVK" />
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setExportOpen(false)}
+                  disabled={exportRunning}
+                >
+                  Close
+                </Button>
+                <Button
+                  onClick={async () => {
+                    try {
+                      setExportRunning(true);
+                      const res = await api.exportViewingKeys(exportPassword);
+                      setViewingKeys(res);
+                      toast.success("Viewing keys exported");
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Failed to export viewing keys");
+                    } finally {
+                      setExportRunning(false);
+                    }
+                  }}
+                  disabled={exportRunning || exportPassword.trim().length === 0}
+                >
+                  {exportRunning ? "Exporting..." : "Export"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </CardContent>
       </Card>
     </div>

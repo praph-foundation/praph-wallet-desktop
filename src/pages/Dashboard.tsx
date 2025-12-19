@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/tauri";
+import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -13,13 +14,21 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
 import CopyButton from "../components/CopyButton";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 
 export default function DashboardPage() {
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
+  const [tvkOpen, setTvkOpen] = useState(false);
+  const [tvkPassword, setTvkPassword] = useState("");
+  const [tvkRunning, setTvkRunning] = useState(false);
+  const [tvk, setTvk] = useState<string | null>(null);
 
   const appInfoQuery = useQuery({
     queryKey: ["appInfo"],
@@ -124,7 +133,18 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={selectedTxId !== null} onOpenChange={(open) => setSelectedTxId(open ? selectedTxId : null)}>
+      <Dialog
+        open={selectedTxId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedTxId(null);
+            setTvkOpen(false);
+            setTvkPassword("");
+            setTvkRunning(false);
+            setTvk(null);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Transaction details</DialogTitle>
@@ -171,10 +191,81 @@ export default function DashboardPage() {
                   <div className="break-words">{selectedTx.memo}</div>
                 </div>
               ) : null}
+
+              <div className="pt-2">
+                <Button variant="outline" onClick={() => setTvkOpen(true)}>
+                  Export TVK
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="text-sm text-muted-foreground">No transaction selected.</div>
           )}
+
+          <Dialog
+            open={tvkOpen}
+            onOpenChange={(open) => {
+              setTvkOpen(open);
+              if (!open) {
+                setTvkPassword("");
+                setTvkRunning(false);
+                setTvk(null);
+              }
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Export TVK</DialogTitle>
+                <DialogDescription>Enter your wallet password to export a transaction view key.</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Password</Label>
+                  <Input
+                    type="password"
+                    value={tvkPassword}
+                    onChange={(e) => setTvkPassword(e.currentTarget.value)}
+                    placeholder="Your password"
+                  />
+                </div>
+
+                {tvk ? (
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">TVK</div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="break-all font-mono text-xs">{tvk}</div>
+                      <CopyButton value={tvk} label="Copy" successMessage="Copied TVK" className="shrink-0" />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setTvkOpen(false)} disabled={tvkRunning}>
+                  Close
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (!selectedTx) return;
+                    try {
+                      setTvkRunning(true);
+                      const res = await api.exportTvk(selectedTx.id, tvkPassword);
+                      setTvk(res.tvk);
+                      toast.success("TVK exported");
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Failed to export TVK");
+                    } finally {
+                      setTvkRunning(false);
+                    }
+                  }}
+                  disabled={tvkRunning || tvkPassword.trim().length === 0 || !selectedTx}
+                >
+                  {tvkRunning ? "Exporting..." : "Export"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </DialogContent>
       </Dialog>
     </div>

@@ -14,6 +14,7 @@ export default function OnboardingPage() {
   const navigate = useNavigate();
   const setHasWallet = useWalletStore((s) => s.setHasWallet);
   const unlock = useWalletStore((s) => s.unlock);
+  const setSyncStatus = useWalletStore((s) => s.setSyncStatus);
 
   const [mode, setMode] = useState<"create" | "import">("create");
   const [password, setPassword] = useState("");
@@ -147,6 +148,15 @@ export default function OnboardingPage() {
 
                   await api.walletImport(mnemonic.trim(), password);
                   toast.success("Wallet imported");
+
+                  try {
+                    setSyncStatus("syncing", "Rescanning...");
+                    await api.scanNotes({ fullRescan: true });
+                    setSyncStatus("idle", null);
+                  } catch {
+                    setSyncStatus("error", "Rescan failed");
+                  }
+
                   setHasWallet(true);
                   unlock();
                   navigate("/", { replace: true });
