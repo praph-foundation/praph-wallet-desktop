@@ -226,6 +226,8 @@ enum HelperRequest {
     GetMemosByFingerprint { fingerprint: String },
     GetNullifierStatus { nullifier: String },
     GetStateRoots,
+    GetNextCommitmentIndex,
+    GetCommitmentPathForIndex { commitment_index: u64 },
     GenerateWitnesses { spends: Vec<SpendRequest> },
 }
 
@@ -237,6 +239,11 @@ enum HelperResponse {
     StateRootsResult {
         commitment_root: String,
         nullifier_root: String,
+    },
+    GetNextCommitmentIndexResult { commitment_index: u64 },
+    GetCommitmentPathForIndexResult {
+        commitment_path: ApiMerklePath,
+        commitment_index: u64,
     },
     GenerateWitnessesResult {
         spend_witnesses_count: usize,
@@ -873,10 +880,10 @@ pub async fn mint_dev_faucet(
     params: MintDevFaucetParams,
 ) -> Result<MintDevFaucetResult, String> {
     use praph_circuits::action::OutputAction;
-    use praph_circuits::hash::{fr_from_bytes, fr_to_bytes, poseidon_hash_two};
+    use praph_circuits::hash::{fr_from_bytes, fr_to_bytes};
     use praph_circuits::inputs::{ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES};
     use praph_circuits::keys::SpendingKey;
-    use praph_circuits::merkle::{empty_leaf, MERKLE_TREE_DEPTH};
+    use praph_circuits::merkle::MerklePath;
     use praph_circuits::note::Note;
     use praph_circuits::halo2::enabled::{create_client_action_proof, load_output_keys, ClientActionCircuit};
     use rand::RngCore;
@@ -963,28 +970,49 @@ pub async fn mint_dev_faucet(
     let output_commitment_hex = hex::encode(output_commitment_bytes);
     let fingerprint_hex = hex::encode(to_fvk.fingerprint());
 
-    // NOTE: This dev faucet mint implementation currently only supports the
-    // first insertion (commitment index 0) on a fresh chain, because the wallet
-    // does not yet have output insertion witnesses for arbitrary indices.
-    let mut empty_roots = Vec::with_capacity(MERKLE_TREE_DEPTH + 1);
-    empty_roots.push(empty_leaf());
-    for i in 0..MERKLE_TREE_DEPTH {
-        let prev = empty_roots[i];
-        empty_roots.push(poseidon_hash_two(&prev, &prev));
-    }
+    // Compute the next commitment root using helper-service's commitment tree.
+    // This removes the "fresh chain" limitation by inserting at the current next index.
+    let next_index_resp = http
+        .post(&helper_url)
+        .json(&HelperRequest::GetNextCommitmentIndex)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let next_index_resp: HelperResponse = next_index_resp.json().await.map_err(|e| e.to_string())?;
+    let next_index = match next_index_resp {
+        HelperResponse::GetNextCommitmentIndexResult { commitment_index } => commitment_index,
+        HelperResponse::Error { message } => return Err(message),
+        _ => return Err("unexpected helper response (GetNextCommitmentIndex)".to_string()),
+    };
 
-    let empty_commitment_root = empty_roots[MERKLE_TREE_DEPTH];
-    if commitment_root_fr != empty_commitment_root {
-        return Err(format!(
-            "dev faucet mint currently requires a fresh chain (empty commitment tree). Current commitment_root={} . Restart testnet (purge) and try again.",
-            hex::encode(fr_to_bytes(&commitment_root_fr))
-        ));
-    }
+    let path_resp = http
+        .post(&helper_url)
+        .json(&HelperRequest::GetCommitmentPathForIndex {
+            commitment_index: next_index,
+        })
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let path_resp: HelperResponse = path_resp.json().await.map_err(|e| e.to_string())?;
+    let api_path = match path_resp {
+        HelperResponse::GetCommitmentPathForIndexResult { commitment_path, .. } => commitment_path,
+        HelperResponse::Error { message } => return Err(message),
+        _ => return Err("unexpected helper response (GetCommitmentPathForIndex)".to_string()),
+    };
 
-    let mut next_commitment_root_fr = poseidon_hash_two(&output_commitment, &empty_leaf());
-    for level in 1..MERKLE_TREE_DEPTH {
-        next_commitment_root_fr = poseidon_hash_two(&next_commitment_root_fr, &empty_roots[level]);
-    }
+    let siblings_fr = api_path
+        .siblings
+        .iter()
+        .map(|h| {
+            let bytes = hex::decode(h).map_err(|_| "invalid sibling hex".to_string())?;
+            let arr: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| "invalid sibling length".to_string())?;
+            Ok(fr_from_bytes(&arr))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let merkle_path = MerklePath::new(siblings_fr, api_path.direction_bits);
+    let next_commitment_root_fr = merkle_path.root(output_commitment);
 
     let output_action = OutputAction {
         note: output_note.clone(),
