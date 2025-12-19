@@ -5,6 +5,16 @@ use rusqlite::{params, Connection};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone)]
+pub struct NoteRow {
+    pub commitment: String,
+    pub commitment_index: u64,
+    pub amount_minor: i64,
+    pub memo: Option<String>,
+    pub received_at: u64,
+    pub spent: bool,
+}
+
 pub struct DbState {
     pub db_path: PathBuf,
 }
@@ -36,6 +46,19 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
             status TEXT NOT NULL\
         );\
         CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp DESC);\
+        CREATE TABLE IF NOT EXISTS notes (\
+            commitment TEXT PRIMARY KEY,\
+            commitment_index INTEGER NOT NULL,\
+            fingerprint TEXT NOT NULL,\
+            encrypted_memo TEXT,\
+            amount_minor INTEGER NOT NULL,\
+            memo TEXT,\
+            received_at INTEGER NOT NULL,\
+            nullifier TEXT,\
+            spent INTEGER NOT NULL\
+        );\
+        CREATE INDEX IF NOT EXISTS idx_notes_received_at ON notes(received_at DESC);\
+        CREATE INDEX IF NOT EXISTS idx_notes_fingerprint ON notes(fingerprint);\
         CREATE TABLE IF NOT EXISTS settings (\
             key TEXT PRIMARY KEY,\
             value TEXT NOT NULL\
@@ -90,6 +113,14 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
 pub fn get_balance(db: &DbState) -> Result<Balance, String> {
     let conn = open_db(db)?;
 
+    let incoming_notes_unspent: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM notes WHERE spent=0",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
     let incoming_confirmed: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE direction='incoming' AND status='confirmed'",
@@ -119,7 +150,7 @@ pub fn get_balance(db: &DbState) -> Result<Balance, String> {
         )
         .map_err(|e| e.to_string())?;
 
-    let confirmed_net = incoming_confirmed - outgoing_confirmed;
+    let confirmed_net = incoming_confirmed + incoming_notes_unspent - outgoing_confirmed;
     let pending_net = incoming_pending - outgoing_pending;
     let total = confirmed_net + pending_net;
 
@@ -132,10 +163,25 @@ pub fn get_balance(db: &DbState) -> Result<Balance, String> {
 }
 
 pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
+    let mut out = Vec::new();
+
+    let notes = list_notes(db)?;
+    for n in notes {
+        out.push(TxSummary {
+            id: format!("note_{}", n.commitment),
+            direction: TxDirection::Incoming,
+            amount: format_amount_minor(n.amount_minor),
+            fee: "0.0000 PRAF".to_string(),
+            memo: n.memo,
+            timestamp: n.received_at,
+            status: TxStatus::Confirmed,
+        });
+    }
+
     let conn = open_db(db)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, direction, amount, fee, memo, timestamp, status FROM transactions ORDER BY timestamp DESC",
+            "SELECT id, direction, amount, fee, memo, timestamp, status FROM transactions",
         )
         .map_err(|e| e.to_string())?;
 
@@ -168,10 +214,11 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
         })
         .map_err(|e| e.to_string())?;
 
-    let mut out = Vec::new();
     for row in rows {
         out.push(row.map_err(|e| e.to_string())?);
     }
+
+    out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(out)
 }
 
@@ -222,6 +269,75 @@ pub fn random_id(prefix: &str) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     format!("{prefix}_{}_{}", crate::unix_ts(), s)
+}
+
+pub fn upsert_note(
+    db: &DbState,
+    commitment: &str,
+    commitment_index: u64,
+    fingerprint: &str,
+    encrypted_memo_hex: &str,
+    amount_minor: i64,
+    memo: Option<&str>,
+    received_at: u64,
+    nullifier_hex: &str,
+    spent: bool,
+) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute(
+        "INSERT INTO notes (commitment, commitment_index, fingerprint, encrypted_memo, amount_minor, memo, received_at, nullifier, spent)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)\
+         ON CONFLICT(commitment) DO UPDATE SET\
+           commitment_index=excluded.commitment_index,\
+           fingerprint=excluded.fingerprint,\
+           encrypted_memo=excluded.encrypted_memo,\
+           amount_minor=excluded.amount_minor,\
+           memo=excluded.memo,\
+           received_at=excluded.received_at,\
+           nullifier=excluded.nullifier,\
+           spent=excluded.spent",
+        params![
+            commitment,
+            commitment_index as i64,
+            fingerprint,
+            encrypted_memo_hex,
+            amount_minor,
+            memo,
+            received_at as i64,
+            nullifier_hex,
+            if spent { 1i64 } else { 0i64 }
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn list_notes(db: &DbState) -> Result<Vec<NoteRow>, String> {
+    let conn = open_db(db)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT commitment, commitment_index, amount_minor, memo, received_at, spent FROM notes ORDER BY received_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(NoteRow {
+                commitment: r.get(0)?,
+                commitment_index: r.get::<_, i64>(1)? as u64,
+                amount_minor: r.get(2)?,
+                memo: r.get(3)?,
+                received_at: r.get::<_, i64>(4)? as u64,
+                spent: r.get::<_, i64>(5)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
 }
 
 fn parse_amount_minor(amount: &str) -> i64 {

@@ -29,7 +29,13 @@ bip39 = { version = "2", features = ["rand"] }
 rand = "0.8"
 argon2 = "0.5"
 aes-gcm = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+chacha20poly1305 = "0.10"
+aead = "0.5"
+hex = "0.4"
 base64 = "0.22"
 keyring = "3"
 zeroize = "1"
+
+praph-circuits = { path = "../../PRAPH/circuits" }
 

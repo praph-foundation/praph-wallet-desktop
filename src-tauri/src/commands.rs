@@ -6,6 +6,7 @@ use crate::types::{
     WalletStatus,
 };
 use crate::wallet::WalletState;
+use serde::{Deserialize, Serialize};
 
 #[tauri::command]
 pub fn app_info(state: tauri::State<'_, crate::AppState>) -> AppInfo {
@@ -27,12 +28,100 @@ pub fn list_transactions(db: tauri::State<'_, DbState>) -> Result<Vec<TxSummary>
 }
 
 #[tauri::command]
-pub fn rescan(db: tauri::State<'_, DbState>) -> Result<(), String> {
-    let _ = scan_notes_impl(&db, ScanNotesParams { full_rescan: true })?;
+pub async fn rescan(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<(), String> {
+    let _ = scan_notes_impl(&wallet, &db, ScanNotesParams { full_rescan: true }).await?;
     db::confirm_pending(&db)
 }
 
-fn scan_notes_impl(db: &DbState, params: ScanNotesParams) -> Result<SyncMetadata, String> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum HelperRequest {
+    GetMemosByFingerprint { fingerprint: String },
+    GetNullifierStatus { nullifier: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum HelperResponse {
+    GetMemosByFingerprintResult { notes: Vec<EncryptedNoteResponse> },
+    GetNullifierStatusResult { exists: bool },
+    Error { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptedNoteResponse {
+    pub commitment: String,
+    pub commitment_index: u64,
+    pub encrypted_memo: Option<String>,
+    pub fingerprint: String,
+}
+
+fn decrypt_memo_v1(encrypted: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
+    use aead::generic_array::GenericArray;
+    use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit};
+
+    if encrypted.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    const NONCE_SIZE: usize = 12;
+    const TAG_SIZE: usize = 16;
+    const MIN_CIPHERTEXT_SIZE: usize = NONCE_SIZE + TAG_SIZE;
+    if encrypted.len() < MIN_CIPHERTEXT_SIZE {
+        return Err("encrypted memo too short".to_string());
+    }
+
+    let nonce_bytes = &encrypted[0..NONCE_SIZE];
+    let tag_start = encrypted.len() - TAG_SIZE;
+    let ciphertext = &encrypted[NONCE_SIZE..tag_start];
+    let tag = &encrypted[tag_start..];
+
+    let key_array = GenericArray::from_slice(key);
+    let nonce_array = GenericArray::from_slice(nonce_bytes);
+    let cipher = ChaCha20Poly1305::new(key_array);
+
+    let mut plaintext = ciphertext.to_vec();
+    let tag_array = GenericArray::from_slice(tag);
+    cipher
+        .decrypt_in_place_detached(nonce_array, b"", &mut plaintext, tag_array)
+        .map_err(|e| format!("memo decryption failed: {e}"))?;
+    Ok(plaintext)
+}
+
+fn parse_v1_plaintext(plaintext: &[u8]) -> Result<([u8; 32], u128, Vec<u8>), String> {
+    const MAGIC: &[u8; 4] = b"PRPH";
+    if plaintext.len() < 4 + 1 + 32 + 16 {
+        return Err("decrypted memo too short".to_string());
+    }
+    if &plaintext[0..4] != MAGIC {
+        return Err("invalid memo magic".to_string());
+    }
+    let version = plaintext[4];
+    if version != 1 {
+        return Err("unsupported memo version".to_string());
+    }
+    let mut note_nonce = [0u8; 32];
+    note_nonce.copy_from_slice(&plaintext[5..37]);
+    let mut amount_bytes = [0u8; 16];
+    amount_bytes.copy_from_slice(&plaintext[37..53]);
+    let amount = u128::from_le_bytes(amount_bytes);
+    let metadata = plaintext[53..].to_vec();
+    Ok((note_nonce, amount, metadata))
+}
+
+async fn scan_notes_impl(
+    wallet: &WalletState,
+    db: &DbState,
+    params: ScanNotesParams,
+) -> Result<SyncMetadata, String> {
+    use praph_circuits::hash::{fr_from_u64, fr_to_bytes};
+    use praph_circuits::keys::IncomingViewingKey;
+    use praph_circuits::keys::SpendingKey;
+    use praph_circuits::note::Note;
+
     let helper = db::get_helper_service_url(db)?;
     let current = db::get_sync_metadata(db)?;
 
@@ -44,21 +133,135 @@ fn scan_notes_impl(db: &DbState, params: ScanNotesParams) -> Result<SyncMetadata
     };
     db::set_sync_metadata(db, &syncing)?;
 
-    let prev_height = current.last_scanned_height.unwrap_or(0);
-    let next_height = if params.full_rescan { 0 } else { prev_height.saturating_add(1) };
+    let spending_key_bytes = {
+        let guard = wallet
+            .unlocked_seed
+            .lock()
+            .map_err(|_| "Wallet state lock poisoned".to_string())?;
+        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
+        if seed.len() < 32 {
+            return Err("Seed too short".to_string());
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&seed[..32]);
+        out
+    };
+    let spending_key = SpendingKey::from_bytes(spending_key_bytes);
+    let fvk = spending_key.derive_full_viewing_key();
+    let fingerprint_hex = hex::encode(fvk.fingerprint());
+    let memo_key = *fvk.memo_key().as_bytes();
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
+
+    let req = HelperRequest::GetMemosByFingerprint {
+        fingerprint: fingerprint_hex.clone(),
+    };
+    let resp = client
+        .post(&url)
+        .json(&req)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let resp: HelperResponse = resp.json().await.map_err(|e| e.to_string())?;
+
+    let notes = match resp {
+        HelperResponse::GetMemosByFingerprintResult { notes } => notes,
+        HelperResponse::Error { message } => return Err(message),
+        _ => return Err("Unexpected helper response".to_string()),
+    };
+
+    let mut max_idx: Option<u64> = None;
+    let now = crate::unix_ts();
+
+    for note in notes {
+        let enc_hex = match note.encrypted_memo {
+            Some(h) => h,
+            None => continue,
+        };
+        let enc_bytes = hex::decode(enc_hex.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+        let plaintext = match decrypt_memo_v1(&enc_bytes, &memo_key) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let (note_nonce, amount, metadata) = match parse_v1_plaintext(&plaintext) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if amount == 0 {
+            continue;
+        }
+
+        let memo_str = std::str::from_utf8(&metadata).ok().map(|s| s.to_string());
+
+        let dummy_commitment = fr_from_u64(0);
+        let dummy_ivk = IncomingViewingKey::from_bytes([0u8; 32]);
+        let note_obj = Note::new(spending_key, dummy_ivk, 0u128, dummy_commitment, note_nonce);
+        let nullifier = note_obj.nullifier(note.commitment_index);
+        let nullifier_bytes = fr_to_bytes(&nullifier);
+        let nullifier_hex = hex::encode(nullifier_bytes);
+
+        let status_req = HelperRequest::GetNullifierStatus {
+            nullifier: nullifier_hex.clone(),
+        };
+        let status_resp = client
+            .post(&url)
+            .json(&status_req)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status_resp: HelperResponse = status_resp.json().await.map_err(|e| e.to_string())?;
+        let spent = match status_resp {
+            HelperResponse::GetNullifierStatusResult { exists } => exists,
+            HelperResponse::Error { message } => return Err(message),
+            _ => false,
+        };
+
+        let amount_minor = if amount > i64::MAX as u128 {
+            i64::MAX
+        } else {
+            amount as i64
+        };
+
+        db::upsert_note(
+            db,
+            &note.commitment,
+            note.commitment_index,
+            &fingerprint_hex,
+            &enc_hex,
+            amount_minor,
+            memo_str.as_deref(),
+            now,
+            &nullifier_hex,
+            spent,
+        )?;
+
+        max_idx = Some(max_idx.map(|m| m.max(note.commitment_index)).unwrap_or(note.commitment_index));
+    }
+
     let done = SyncMetadata {
         state: SyncState::Idle,
         message: None,
         last_synced_at: Some(crate::unix_ts()),
-        last_scanned_height: Some(next_height),
+        last_scanned_height: max_idx.or(current.last_scanned_height).or(Some(0)),
     };
     db::set_sync_metadata(db, &done)?;
+
+    if params.full_rescan {
+        // v0 behavior kept for compatibility: confirm any locally pending outgoing txs.
+        let _ = db::confirm_pending(db);
+    }
+
     Ok(done)
 }
 
 #[tauri::command]
-pub fn scan_notes(db: tauri::State<'_, DbState>, params: ScanNotesParams) -> Result<SyncMetadata, String> {
-    scan_notes_impl(&db, params)
+pub async fn scan_notes(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    params: ScanNotesParams,
+) -> Result<SyncMetadata, String> {
+    scan_notes_impl(&wallet, &db, params).await
 }
 
 #[tauri::command]
