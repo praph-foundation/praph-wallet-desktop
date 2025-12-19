@@ -31,6 +31,7 @@ export default function AppLayout() {
   const [accountPickerOpen, setAccountPickerOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newAccountName, setNewAccountName] = useState("");
+  const [accountBusy, setAccountBusy] = useState(false);
 
   useEffect(() => {
     if (lockState !== "unlocked") return;
@@ -89,9 +90,18 @@ export default function AppLayout() {
                           type="button"
                           className="flex w-full items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/40"
                           onClick={async () => {
-                            const s = await api.switchAccount(a.index);
-                            setAccountsState(s.accounts, s.activeAccountIndex);
-                            setAccountPickerOpen(false);
+                            if (accountBusy) return;
+                            try {
+                              setAccountBusy(true);
+                              const s = await api.switchAccount(a.index);
+                              setAccountsState(s.accounts, s.activeAccountIndex);
+                              toast.success("Switched account");
+                              setAccountPickerOpen(false);
+                            } catch (e) {
+                              toast.error(e instanceof Error ? e.message : "Failed to switch account");
+                            } finally {
+                              setAccountBusy(false);
+                            }
                           }}
                         >
                           <div className="text-left">
@@ -137,15 +147,24 @@ export default function AppLayout() {
                       </Button>
                       <Button
                         onClick={async () => {
-                          const name = newAccountName.trim();
-                          const s = name
-                            ? await api.createAccountNamed(name)
-                            : await api.createAccount();
-                          setAccountsState(s.accounts, s.activeAccountIndex);
-                          toast.success("Account created");
-                          setCreateOpen(false);
-                          setNewAccountName("");
+                          if (accountBusy) return;
+                          try {
+                            setAccountBusy(true);
+                            const name = newAccountName.trim();
+                            const s = name
+                              ? await api.createAccountNamed(name)
+                              : await api.createAccount();
+                            setAccountsState(s.accounts, s.activeAccountIndex);
+                            toast.success("Account created");
+                            setCreateOpen(false);
+                            setNewAccountName("");
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : "Failed to create account");
+                          } finally {
+                            setAccountBusy(false);
+                          }
                         }}
+                        disabled={accountBusy}
                       >
                         Create
                       </Button>

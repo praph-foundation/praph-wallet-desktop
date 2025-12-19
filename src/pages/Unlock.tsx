@@ -11,6 +11,7 @@ import { useWalletStore } from "../state/walletStore";
 export default function UnlockPage() {
   const navigate = useNavigate();
   const unlock = useWalletStore((s) => s.unlock);
+  const setHasWallet = useWalletStore((s) => s.setHasWallet);
 
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,7 +26,15 @@ export default function UnlockPage() {
       toast.success("Wallet unlocked");
       navigate("/", { replace: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to unlock");
+      const msg = e instanceof Error ? e.message : "Failed to unlock";
+      // If the seed is missing from secure storage, the user must re-onboard/import.
+      if (msg.includes("No matching entry found in secure storage")) {
+        setHasWallet(false);
+        toast.error("Wallet seed not found in secure storage. Please create/import again.");
+        navigate("/onboarding", { replace: true });
+        return;
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
