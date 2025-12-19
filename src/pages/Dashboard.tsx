@@ -62,7 +62,15 @@ export default function DashboardPage() {
       setMintMemo("");
     },
     onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Mint failed");
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "string"
+            ? e
+            : e && typeof e === "object" && "message" in (e as any)
+              ? String((e as any).message)
+              : JSON.stringify(e);
+      toast.error(msg || "Mint failed");
     },
   });
 
