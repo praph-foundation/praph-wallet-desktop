@@ -103,6 +103,20 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
     Ok(())
 }
 
+pub fn get_account_name_for_index(db: &DbState, account_index: u32) -> Result<Option<String>, String> {
+    let key = account_name_key_for_index(account_index);
+    get_setting(db, &key)
+}
+
+pub fn set_account_name_for_index(
+    db: &DbState,
+    account_index: u32,
+    name: String,
+) -> Result<(), String> {
+    let key = account_name_key_for_index(account_index);
+    set_setting(db, &key, &name)
+}
+
 pub fn get_balance(db: &DbState) -> Result<Balance, String> {
     let conn = open_db(db)?;
 
@@ -464,6 +478,10 @@ fn set_u32_setting(db: &DbState, key: &str, value: u32) -> Result<(), String> {
 
 fn receive_address_key_for_index(account_index: u32) -> String {
     format!("receive_address_{}", account_index)
+}
+
+fn account_name_key_for_index(account_index: u32) -> String {
+    format!("account_name_{}", account_index)
 }
 
 pub fn get_account_count(db: &DbState) -> Result<u32, String> {

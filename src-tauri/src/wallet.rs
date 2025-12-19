@@ -36,6 +36,7 @@ fn ss58check_encode(prefix: u16, account_id_32: &[u8; 32]) -> Result<String, Str
 
 pub struct WalletState {
     pub keyring_service: String,
+    pub keyring_service_fallbacks: Vec<String>,
     pub keyring_username: String,
     pub unlocked_seed: Mutex<Option<Zeroizing<Vec<u8>>>>,
 }
@@ -58,17 +59,36 @@ fn salt16_from_str(s: &str) -> [u8; 16] {
 }
 
 impl WalletState {
-    fn entry(&self) -> Result<Entry, String> {
-        Entry::new(&self.keyring_service, &self.keyring_username).map_err(|e| e.to_string())
+    fn entry_for_service(&self, service: &str) -> Result<Entry, String> {
+        Entry::new(service, &self.keyring_username).map_err(|e| e.to_string())
+    }
+
+    fn candidate_services(&self) -> Vec<String> {
+        let mut out = Vec::with_capacity(1 + self.keyring_service_fallbacks.len());
+        out.push(self.keyring_service.clone());
+        for s in &self.keyring_service_fallbacks {
+            if !out.contains(s) {
+                out.push(s.clone());
+            }
+        }
+        out
+    }
+
+    fn load_encrypted_seed_from_any_entry(&self) -> Result<(String, String), String> {
+        // returns (service_name, encrypted_payload_json)
+        for service in self.candidate_services() {
+            let entry = self.entry_for_service(&service)?;
+            match entry.get_password() {
+                Ok(enc) => return Ok((service, enc)),
+                Err(keyring::Error::NoEntry) => continue,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        Err("No matching entry found in secure storage".to_string())
     }
 
     pub fn status(&self) -> Result<WalletStatus, String> {
-        let entry = self.entry()?;
-        let has_wallet = match entry.get_password() {
-            Ok(_) => true,
-            Err(keyring::Error::NoEntry) => false,
-            Err(e) => return Err(e.to_string()),
-        };
+        let has_wallet = self.load_encrypted_seed_from_any_entry().is_ok();
 
         let is_unlocked = self
             .unlocked_seed
@@ -88,7 +108,9 @@ impl WalletState {
             .map_err(|e| e.to_string())?;
         let seed = mnemonic.to_seed_normalized("");
         let enc = encrypt_seed(&seed, &password)?;
-        self.entry()?.set_password(&enc).map_err(|e| e.to_string())?;
+        self.entry_for_service(&self.keyring_service)?
+            .set_password(&enc)
+            .map_err(|e| e.to_string())?;
 
         let mut guard = self
             .unlocked_seed
@@ -106,7 +128,9 @@ impl WalletState {
             .map_err(|e| e.to_string())?;
         let seed = mnemonic.to_seed_normalized("");
         let enc = encrypt_seed(&seed, &password)?;
-        self.entry()?.set_password(&enc).map_err(|e| e.to_string())?;
+        self.entry_for_service(&self.keyring_service)?
+            .set_password(&enc)
+            .map_err(|e| e.to_string())?;
 
         let mut guard = self
             .unlocked_seed
@@ -117,8 +141,15 @@ impl WalletState {
     }
 
     pub fn unlock(&self, password: String) -> Result<(), String> {
-        let enc = self.entry()?.get_password().map_err(|e| e.to_string())?;
+        let (service, enc) = self.load_encrypted_seed_from_any_entry()?;
         let seed = decrypt_seed(&enc, &password)?;
+
+        // If the entry was found under a legacy service name, migrate it to the primary.
+        if service != self.keyring_service {
+            let _ = self
+                .entry_for_service(&self.keyring_service)
+                .and_then(|e| e.set_password(&enc).map_err(|e| e.to_string()));
+        }
         let mut guard = self
             .unlocked_seed
             .lock()
@@ -176,7 +207,7 @@ impl WalletState {
     }
 
     pub fn export_viewing_keys(&self, password: String) -> Result<ViewingKeysResult, String> {
-        let enc = self.entry()?.get_password().map_err(|e| e.to_string())?;
+        let (_service, enc) = self.load_encrypted_seed_from_any_entry()?;
         let seed = Zeroizing::new(decrypt_seed(&enc, &password)?);
 
         let fvk = derive_key_hex(&seed, b"praph_fvk_salt__")?;
@@ -187,7 +218,7 @@ impl WalletState {
     }
 
     pub fn export_tvk(&self, tx_id: String, password: String) -> Result<TvkResult, String> {
-        let enc = self.entry()?.get_password().map_err(|e| e.to_string())?;
+        let (_service, enc) = self.load_encrypted_seed_from_any_entry()?;
         let seed = Zeroizing::new(decrypt_seed(&enc, &password)?);
 
         let salt = salt16_from_str(&tx_id);

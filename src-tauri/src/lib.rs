@@ -39,7 +39,14 @@ pub fn run() {
             os,
         })
         .manage(wallet::WalletState {
-            keyring_service: ctx.config().identifier.clone(),
+            // Use a stable keyring service name so upgrades / dev-vs-release don't lose access
+            // to the keychain entry.
+            keyring_service: "com.eunseong.praph-wallet".to_string(),
+            keyring_service_fallbacks: vec![
+                ctx.config().identifier.clone(),
+                "praph-wallet".to_string(),
+                "Praph Wallet".to_string(),
+            ],
             keyring_username: "wallet_seed".to_string(),
             unlocked_seed: Mutex::new(None),
         })

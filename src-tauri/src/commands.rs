@@ -1169,8 +1169,11 @@ pub fn wallet_create(
     password: String,
 ) -> Result<WalletCreateResult, String> {
     let res = wallet.create(password)?;
+    let _ = db::set_account_count(&db, 1);
+    let _ = db::set_active_account_index(&db, 0);
+    let _ = db::set_account_name_for_index(&db, 0, "Account 1".to_string());
     if let Ok(addr) = wallet.generate_address() {
-        let _ = db::set_receive_address(&db, addr.address);
+        let _ = db::set_receive_address_for_index(&db, 0, addr.address);
     }
     Ok(res)
 }
@@ -1183,8 +1186,11 @@ pub fn wallet_import(
     password: String,
 ) -> Result<(), String> {
     wallet.import(mnemonic, password)?;
+    let _ = db::set_account_count(&db, 1);
+    let _ = db::set_active_account_index(&db, 0);
+    let _ = db::set_account_name_for_index(&db, 0, "Account 1".to_string());
     if let Ok(addr) = wallet.generate_address() {
-        let _ = db::set_receive_address(&db, addr.address);
+        let _ = db::set_receive_address_for_index(&db, 0, addr.address);
     }
     Ok(())
 }
@@ -1226,6 +1232,8 @@ pub fn get_accounts_state(
     let mut accounts = Vec::new();
 
     for idx in 0..count {
+        let name = db::get_account_name_for_index(&db, idx)?
+            .unwrap_or_else(|| format!("Account {}", idx + 1));
         let address = match db::get_receive_address_for_index(&db, idx)? {
             Some(a) if !a.is_empty() && !a.starts_with("praph1") => a,
             _ => {
@@ -1236,6 +1244,7 @@ pub fn get_accounts_state(
         };
         accounts.push(AccountInfo {
             index: idx,
+            name,
             address,
             is_active: idx == active,
         });
@@ -1252,9 +1261,21 @@ pub fn create_account(
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
 ) -> Result<AccountsState, String> {
+    create_account_named(wallet, db, None)
+}
+
+#[tauri::command]
+pub fn create_account_named(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    name: Option<String>,
+) -> Result<AccountsState, String> {
     let count = db::get_account_count(&db)?;
     let new_index = count;
     db::set_account_count(&db, count.saturating_add(1))?;
+
+    let nm = name.unwrap_or_else(|| format!("Account {}", new_index + 1));
+    db::set_account_name_for_index(&db, new_index, nm)?;
 
     let address = wallet.generate_address_for_index(new_index)?.address;
     db::set_receive_address_for_index(&db, new_index, address)?;

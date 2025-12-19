@@ -91,6 +91,7 @@ export interface AddressResult {
 
 export interface AccountInfo {
   index: number;
+  name: string;
   address: string;
   isActive: boolean;
 }
@@ -151,7 +152,7 @@ let mockBalance: Balance = {
 let mockTxs: TxSummary[] = [];
 
 let mockAccounts: AccountInfo[] = [
-  { index: 0, address: "", isActive: true },
+  { index: 0, name: "Account 1", address: "", isActive: true },
 ];
 let mockActiveAccountIndex = 0;
 
@@ -179,6 +180,8 @@ const tauriApi = {
 
   getAccountsState: () => invokeSafe<AccountsState>("get_accounts_state"),
   createAccount: () => invokeSafe<AccountsState>("create_account"),
+  createAccountNamed: (name: string) =>
+    invokeSafe<AccountsState>("create_account_named", { name }),
   switchAccount: (accountIndex: number) =>
     invokeSafe<AccountsState>("switch_account", { account_index: accountIndex }),
 
@@ -274,7 +277,16 @@ const mockApi = {
     const next = mockAccounts.length;
     mockAccounts = [
       ...mockAccounts.map((a) => ({ ...a, isActive: a.index === mockActiveAccountIndex })),
-      { index: next, address: "", isActive: false },
+      { index: next, name: `Account ${next + 1}`, address: "", isActive: false },
+    ];
+    return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
+  },
+  createAccountNamed: async (name: string): Promise<AccountsState> => {
+    await sleep(50);
+    const next = mockAccounts.length;
+    mockAccounts = [
+      ...mockAccounts.map((a) => ({ ...a, isActive: a.index === mockActiveAccountIndex })),
+      { index: next, name, address: "", isActive: false },
     ];
     return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
   },

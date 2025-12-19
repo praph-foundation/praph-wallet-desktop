@@ -119,6 +119,7 @@ pub struct AddressResult {
 #[serde(rename_all = "camelCase")]
 pub struct AccountInfo {
     pub index: u32,
+    pub name: String,
     pub address: String,
     pub is_active: bool,
 }

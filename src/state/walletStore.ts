@@ -5,6 +5,7 @@ export type ThemeMode = "light" | "dark";
 export type SyncStatus = "idle" | "syncing" | "error";
 export interface AccountInfo {
   index: number;
+  name: string;
   address: string;
   isActive: boolean;
 }

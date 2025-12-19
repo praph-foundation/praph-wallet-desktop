@@ -1,11 +1,21 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/tauri";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import { useWalletStore } from "../state/walletStore";
-import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus } from "lucide-react";
+import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus, ChevronDown, Check } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "./ui/dialog";
+import { Input } from "./ui/input";
+import { toast } from "sonner";
 
 export default function AppLayout() {
   const navigate = useNavigate();
@@ -17,6 +27,10 @@ export default function AppLayout() {
   const accounts = useWalletStore((s) => s.accounts);
   const activeAccountIndex = useWalletStore((s) => s.activeAccountIndex);
   const setAccountsState = useWalletStore((s) => s.setAccountsState);
+
+  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newAccountName, setNewAccountName] = useState("");
 
   useEffect(() => {
     if (lockState !== "unlocked") return;
@@ -50,36 +64,95 @@ export default function AppLayout() {
           <div className="mb-4 rounded-md border border-border bg-muted/20 p-3">
             <div className="text-xs text-muted-foreground">Account</div>
             <div className="mt-2 flex items-center gap-2">
-              <select
-                value={activeAccountIndex}
-                onChange={async (e) => {
-                  const idx = Number(e.currentTarget.value);
-                  const s = await api.switchAccount(idx);
-                  setAccountsState(s.accounts, s.activeAccountIndex);
-                }}
-                className="flex h-9 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                {accounts.length ? (
-                  accounts.map((a) => (
-                    <option key={a.index} value={a.index}>
-                      {`Account ${a.index + 1}`}
-                    </option>
-                  ))
-                ) : (
-                  <option value={0}>Account 1</option>
-                )}
-              </select>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={async () => {
-                  const s = await api.createAccount();
-                  setAccountsState(s.accounts, s.activeAccountIndex);
-                }}
-                title="Create new account"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+              <Dialog open={accountPickerOpen} onOpenChange={setAccountPickerOpen}>
+                <DialogTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-9 flex-1 items-center justify-between rounded-md border border-input bg-background px-3 text-sm shadow-sm hover:bg-muted/40"
+                  >
+                    <span className="truncate">
+                      {accounts.find((a) => a.index === activeAccountIndex)?.name ?? "Account 1"}
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Switch account</DialogTitle>
+                    <DialogDescription>Select the active account for receiving/sending.</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-1">
+                    {(accounts.length ? accounts : [{ index: 0, name: "Account 1", address: "", isActive: true }]).map(
+                      (a) => (
+                        <button
+                          key={a.index}
+                          type="button"
+                          className="flex w-full items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/40"
+                          onClick={async () => {
+                            const s = await api.switchAccount(a.index);
+                            setAccountsState(s.accounts, s.activeAccountIndex);
+                            setAccountPickerOpen(false);
+                          }}
+                        >
+                          <div className="text-left">
+                            <div className="font-medium">{a.name}</div>
+                            <div className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">
+                              {a.address}
+                            </div>
+                          </div>
+                          {a.index === activeAccountIndex ? <Check className="h-4 w-4" /> : null}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+
+              <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline" title="Create new account">
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Create new account</DialogTitle>
+                    <DialogDescription>Give your new account a name.</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <Input
+                      value={newAccountName}
+                      onChange={(e) => setNewAccountName(e.currentTarget.value)}
+                      placeholder={`Account ${accounts.length + 1}`}
+                    />
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setCreateOpen(false);
+                          setNewAccountName("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={async () => {
+                          const name = newAccountName.trim();
+                          const s = name
+                            ? await api.createAccountNamed(name)
+                            : await api.createAccount();
+                          setAccountsState(s.accounts, s.activeAccountIndex);
+                          toast.success("Account created");
+                          setCreateOpen(false);
+                          setNewAccountName("");
+                        }}
+                      >
+                        Create
+                      </Button>
+                    </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
             {accounts.length ? (
               <div className="mt-2 break-all font-mono text-[11px] text-muted-foreground">
