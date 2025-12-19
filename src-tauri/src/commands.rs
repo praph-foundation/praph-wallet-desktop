@@ -2,7 +2,7 @@ use crate::db;
 use crate::db::DbState;
 use crate::types::{
     AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, SendParams, SendResult, Settings,
-    TxSummary, WalletCreateResult, WalletStatus,
+    TxSummary, WalletCreateResult, WalletStatus, AddressResult,
 };
 use crate::wallet::WalletState;
 
@@ -70,18 +70,28 @@ pub fn wallet_status(wallet: tauri::State<'_, WalletState>) -> Result<WalletStat
 #[tauri::command]
 pub fn wallet_create(
     wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
     password: String,
 ) -> Result<WalletCreateResult, String> {
-    wallet.create(password)
+    let res = wallet.create(password)?;
+    if let Ok(addr) = wallet.generate_address() {
+        let _ = db::set_receive_address(&db, addr.address);
+    }
+    Ok(res)
 }
 
 #[tauri::command]
 pub fn wallet_import(
     wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
     mnemonic: String,
     password: String,
 ) -> Result<(), String> {
-    wallet.import(mnemonic, password)
+    wallet.import(mnemonic, password)?;
+    if let Ok(addr) = wallet.generate_address() {
+        let _ = db::set_receive_address(&db, addr.address);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -95,8 +105,16 @@ pub fn wallet_lock(wallet: tauri::State<'_, WalletState>) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn generate_address(wallet: tauri::State<'_, WalletState>) -> Result<crate::types::AddressResult, String> {
-    wallet.generate_address()
+pub fn generate_address(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<AddressResult, String> {
+    if let Some(address) = db::get_receive_address(&db)? {
+        return Ok(AddressResult { address });
+    }
+    let res = wallet.generate_address()?;
+    db::set_receive_address(&db, res.address.clone())?;
+    Ok(res)
 }
 
 #[tauri::command]

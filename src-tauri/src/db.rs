@@ -289,3 +289,11 @@ pub fn get_helper_service_url(db: &DbState) -> Result<String, String> {
 pub fn set_helper_service_url(db: &DbState, url: String) -> Result<(), String> {
     set_setting(db, "helper_service_url", &url)
 }
+
+pub fn get_receive_address(db: &DbState) -> Result<Option<String>, String> {
+    get_setting(db, "receive_address")
+}
+
+pub fn set_receive_address(db: &DbState, address: String) -> Result<(), String> {
+    set_setting(db, "receive_address", &address)
+}

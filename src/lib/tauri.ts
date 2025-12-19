@@ -57,6 +57,10 @@ export interface WalletCreateResult {
   mnemonic: string;
 }
 
+export interface AddressResult {
+  address: string;
+}
+
 export interface Settings {
   helperServiceUrl: string;
 }
@@ -118,6 +122,8 @@ const tauriApi = {
   sendTransaction: (params: SendParams) => invoke<SendResult>("send_transaction", { params }),
   bridgeDeposit: (params: BridgeDepositParams) =>
     invoke<BridgeDepositResult>("bridge_deposit", { params }),
+
+  generateAddress: () => invoke<AddressResult>("generate_address"),
 
   getSettings: () => invoke<Settings>("get_settings"),
   setHelperServiceUrl: (url: string) => invoke<void>("set_helper_service_url", { url }),
@@ -191,6 +197,11 @@ const mockApi = {
       ...mockTxs,
     ];
     return { txId };
+  },
+
+  generateAddress: async (): Promise<AddressResult> => {
+    await sleep(50);
+    return { address: "praph1q9d2...demo-address" };
   },
 
   bridgeDeposit: async (params: BridgeDepositParams): Promise<BridgeDepositResult> => {
