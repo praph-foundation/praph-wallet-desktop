@@ -99,7 +99,9 @@ export interface TvkResult {
 }
 
 function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && Boolean((window as any).__TAURI__);
+  if (typeof window === "undefined") return false;
+  const w = window as any;
+  return Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__);
 }
 
 function sleep(ms: number): Promise<void> {
