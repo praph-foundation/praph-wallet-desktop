@@ -1,9 +1,19 @@
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../components/ui/dialog";
 
 export default function ReceivePage() {
   const address = "praph1q9d2...demo-address";
+  const [qrOpen, setQrOpen] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -38,9 +48,40 @@ export default function ReceivePage() {
               >
                 Copy
               </Button>
-              <Button variant="outline" disabled>
-                Show QR
-              </Button>
+              <Dialog open={qrOpen} onOpenChange={setQrOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline">Show QR</Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Receive QR</DialogTitle>
+                    <DialogDescription>
+                      QR generation will be wired to backend address derivation.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-center rounded-md border border-border bg-muted/30 p-6">
+                      <div className="text-sm text-muted-foreground">QR placeholder</div>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/30 p-3">
+                      <div className="break-all font-mono text-xs">{address}</div>
+                    </div>
+                    <Button
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(address);
+                          toast.success("Copied address");
+                        } catch {
+                          toast.error("Failed to copy");
+                        }
+                      }}
+                    >
+                      Copy address
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
 
             <div className="text-xs text-muted-foreground">

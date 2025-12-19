@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api } from "../lib/tauri";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
@@ -18,13 +19,14 @@ export default function OnboardingPage() {
   const [password, setPassword] = useState("");
   const [mnemonic, setMnemonic] = useState("");
   const [createdMnemonic, setCreatedMnemonic] = useState<string | null>(null);
+  const [backedUp, setBackedUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const canSubmit =
     !loading &&
     Boolean(password) &&
-    (mode === "create" ? true : Boolean(mnemonic.trim()));
+    (mode === "create" ? (createdMnemonic ? backedUp : true) : Boolean(mnemonic.trim()));
 
   return (
     <div className="mx-auto flex h-full max-w-xl items-center p-6">
@@ -42,6 +44,7 @@ export default function OnboardingPage() {
               onClick={() => {
                 setMode("create");
                 setCreatedMnemonic(null);
+                setBackedUp(false);
                 setError(null);
               }}
             >
@@ -53,6 +56,7 @@ export default function OnboardingPage() {
               onClick={() => {
                 setMode("import");
                 setCreatedMnemonic(null);
+                setBackedUp(false);
                 setError(null);
               }}
             >
@@ -100,6 +104,16 @@ export default function OnboardingPage() {
                 <div className="text-xs text-muted-foreground">
                   Write this down and keep it offline. It will not be shown again.
                 </div>
+                <div className="flex items-start gap-2 pt-2">
+                  <Checkbox
+                    id="backup-confirm"
+                    checked={backedUp}
+                    onCheckedChange={(v) => setBackedUp(Boolean(v))}
+                  />
+                  <label htmlFor="backup-confirm" className="text-sm leading-5">
+                    I have backed up my mnemonic securely.
+                  </label>
+                </div>
               </div>
             ) : null}
 
@@ -121,6 +135,7 @@ export default function OnboardingPage() {
                     if (!createdMnemonic) {
                       const res = await api.walletCreate(password);
                       setCreatedMnemonic(res.mnemonic);
+                      setBackedUp(false);
                       toast.success("Wallet created");
                       return;
                     }
