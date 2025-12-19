@@ -10,6 +10,30 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
+fn ss58check_encode(prefix: u16, account_id_32: &[u8; 32]) -> Result<String, String> {
+    use blake2::digest::Digest;
+    use blake2::Blake2b512;
+
+    // SS58 format for prefix < 64: single byte.
+    if prefix >= 64 {
+        return Err("SS58 prefix >= 64 not supported".to_string());
+    }
+    let prefix_byte = prefix as u8;
+
+    let mut data = Vec::with_capacity(1 + 32 + 2);
+    data.push(prefix_byte);
+    data.extend_from_slice(account_id_32);
+
+    // Checksum: first 2 bytes of blake2b("SS58PRE" ++ data)
+    let mut hasher = Blake2b512::new();
+    hasher.update(b"SS58PRE");
+    hasher.update(&data);
+    let hash = hasher.finalize();
+    data.extend_from_slice(&hash[..2]);
+
+    Ok(bs58::encode(data).into_string())
+}
+
 pub struct WalletState {
     pub keyring_service: String,
     pub keyring_username: String,
@@ -118,10 +142,16 @@ impl WalletState {
             .lock()
             .map_err(|_| "Wallet state lock poisoned".to_string())?;
         let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
-        let hex = to_hex(&seed[..std::cmp::min(seed.len(), 20)]);
-        Ok(AddressResult {
-            address: format!("praph1{}", hex),
-        })
+
+        if seed.len() < 32 {
+            return Err("Seed too short".to_string());
+        }
+        let mut account_bytes = [0u8; 32];
+        account_bytes.copy_from_slice(&seed[..32]);
+
+        // PRAPH runtime uses the generic Substrate SS58 prefix 42.
+        let address = ss58check_encode(42, &account_bytes)?;
+        Ok(AddressResult { address })
     }
 
     pub fn export_viewing_keys(&self, password: String) -> Result<ViewingKeysResult, String> {

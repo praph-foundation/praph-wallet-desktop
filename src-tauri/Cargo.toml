@@ -37,4 +37,7 @@ base64 = "0.22"
 keyring = "3"
 zeroize = "1"
 
+bs58 = "0.5"
+blake2 = "0.10"
+
 praph-circuits = { path = "../../PRAPH/circuits", features = ["halo2"] }

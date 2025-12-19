@@ -84,8 +84,13 @@ fn build_v1_plaintext(note_nonce: &[u8; 32], amount: u128, metadata: &[u8]) -> V
 }
 
 #[tauri::command]
-pub fn get_balance(db: tauri::State<'_, DbState>) -> Result<Balance, String> {
-    db::get_balance(&db)
+pub async fn get_balance(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<Balance, String> {
+    // Sync from helper-service so balance reflects the latest server-visible notes/nullifiers.
+    let _ = scan_notes_impl(&wallet, &db, ScanNotesParams { full_rescan: false }).await?;
+    Ok(db::get_balance(&db)?)
 }
 
 #[tauri::command]
@@ -814,7 +819,10 @@ pub fn generate_address(
     db: tauri::State<'_, DbState>,
 ) -> Result<AddressResult, String> {
     if let Some(address) = db::get_receive_address(&db)? {
-        return Ok(AddressResult { address });
+        // Legacy demo format used `praph1...` (not SS58). Regenerate if detected.
+        if !address.starts_with("praph1") {
+            return Ok(AddressResult { address });
+        }
     }
     let res = wallet.generate_address()?;
     db::set_receive_address(&db, res.address.clone())?;
