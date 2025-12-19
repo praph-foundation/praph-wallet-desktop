@@ -1,5 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 
+function toErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
+async function invokeSafe<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (e) {
+    throw new Error(toErrorMessage(e));
+  }
+}
+
 export interface AppInfo {
   version: string;
   identifier: string;
@@ -122,37 +140,37 @@ let mockBalance: Balance = {
 let mockTxs: TxSummary[] = [];
 
 const tauriApi = {
-  appInfo: () => invoke<AppInfo>("app_info"),
+  appInfo: () => invokeSafe<AppInfo>("app_info"),
 
-  walletStatus: () => invoke<WalletStatus>("wallet_status"),
+  walletStatus: () => invokeSafe<WalletStatus>("wallet_status"),
   walletCreate: (password: string) =>
-    invoke<WalletCreateResult>("wallet_create", { password }),
+    invokeSafe<WalletCreateResult>("wallet_create", { password }),
   walletImport: (mnemonic: string, password: string) =>
-    invoke<void>("wallet_import", { mnemonic, password }),
-  walletUnlock: (password: string) => invoke<void>("wallet_unlock", { password }),
-  walletLock: () => invoke<void>("wallet_lock"),
+    invokeSafe<void>("wallet_import", { mnemonic, password }),
+  walletUnlock: (password: string) => invokeSafe<void>("wallet_unlock", { password }),
+  walletLock: () => invokeSafe<void>("wallet_lock"),
 
-  getBalance: () => invoke<Balance>("get_balance"),
-  listTransactions: () => invoke<TxSummary[]>("list_transactions"),
-  rescan: () => invoke<void>("rescan"),
-  sendTransaction: (params: SendParams) => invoke<SendResult>("send_transaction", { params }),
+  getBalance: () => invokeSafe<Balance>("get_balance"),
+  listTransactions: () => invokeSafe<TxSummary[]>("list_transactions"),
+  rescan: () => invokeSafe<void>("rescan"),
+  sendTransaction: (params: SendParams) => invokeSafe<SendResult>("send_transaction", { params }),
   mintDevFaucet: (params: MintDevFaucetParams) =>
-    invoke<MintDevFaucetResult>("mint_dev_faucet", { params }),
+    invokeSafe<MintDevFaucetResult>("mint_dev_faucet", { params }),
   bridgeDeposit: (params: BridgeDepositParams) =>
-    invoke<BridgeDepositResult>("bridge_deposit", { params }),
+    invokeSafe<BridgeDepositResult>("bridge_deposit", { params }),
 
-  generateAddress: () => invoke<AddressResult>("generate_address"),
+  generateAddress: () => invokeSafe<AddressResult>("generate_address"),
 
-  getSettings: () => invoke<Settings>("get_settings"),
-  setHelperServiceUrl: (url: string) => invoke<void>("set_helper_service_url", { url }),
+  getSettings: () => invokeSafe<Settings>("get_settings"),
+  setHelperServiceUrl: (url: string) => invokeSafe<void>("set_helper_service_url", { url }),
 
-  getSyncMetadata: () => invoke<SyncMetadata>("get_sync_metadata"),
-  scanNotes: (params: ScanNotesParams) => invoke<SyncMetadata>("scan_notes", { params }),
+  getSyncMetadata: () => invokeSafe<SyncMetadata>("get_sync_metadata"),
+  scanNotes: (params: ScanNotesParams) => invokeSafe<SyncMetadata>("scan_notes", { params }),
 
   exportViewingKeys: (password: string) =>
-    invoke<ViewingKeysResult>("export_viewing_keys", { password }),
+    invokeSafe<ViewingKeysResult>("export_viewing_keys", { password }),
   exportTvk: (txId: string, password: string) =>
-    invoke<TvkResult>("export_tvk", { tx_id: txId, password }),
+    invokeSafe<TvkResult>("export_tvk", { tx_id: txId, password }),
 };
 
 const mockApi = {

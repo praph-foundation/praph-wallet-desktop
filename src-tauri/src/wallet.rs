@@ -235,7 +235,7 @@ fn decrypt_seed(payload_json: &str, password: &str) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
     cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
-        .map_err(|e| e.to_string())
+        .map_err(|_| "Invalid password".to_string())
 }
 
 fn to_hex(bytes: &[u8]) -> String {

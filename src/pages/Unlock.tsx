@@ -16,6 +16,21 @@ export default function UnlockPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  async function doUnlock() {
+    try {
+      setError(null);
+      setLoading(true);
+      await api.walletUnlock(password.trim());
+      unlock();
+      toast.success("Wallet unlocked");
+      navigate("/", { replace: true });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to unlock");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div className="mx-auto flex h-full max-w-xl items-center p-6">
       <Card className="w-full">
@@ -32,6 +47,11 @@ export default function UnlockPage() {
                 value={password}
                 onChange={(e) => setPassword(e.currentTarget.value)}
                 placeholder="Your wallet password"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && password && !loading) {
+                    void doUnlock();
+                  }
+                }}
               />
             </div>
 
@@ -44,20 +64,7 @@ export default function UnlockPage() {
             <Button
               className="w-full"
               disabled={!password || loading}
-              onClick={async () => {
-                try {
-                  setError(null);
-                  setLoading(true);
-                  await api.walletUnlock(password);
-                  unlock();
-                  toast.success("Wallet unlocked");
-                  navigate("/", { replace: true });
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : "Failed to unlock");
-                } finally {
-                  setLoading(false);
-                }
-              }}
+              onClick={doUnlock}
             >
               {loading ? "Unlocking..." : "Unlock"}
             </Button>
