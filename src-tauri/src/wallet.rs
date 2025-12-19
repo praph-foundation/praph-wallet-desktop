@@ -16,6 +16,23 @@ pub struct WalletState {
     pub unlocked_seed: Mutex<Option<Zeroizing<Vec<u8>>>>,
 }
 
+fn derive_key_hex(seed: &[u8], salt_16: &[u8; 16]) -> Result<String, String> {
+    let mut out = [0u8; 32];
+    Argon2::default()
+        .hash_password_into(seed, salt_16, &mut out)
+        .map_err(|e| e.to_string())?;
+    Ok(to_hex(&out))
+}
+
+fn salt16_from_str(s: &str) -> [u8; 16] {
+    let mut salt = [0u8; 16];
+    let bytes = s.as_bytes();
+    for (i, b) in bytes.iter().take(16).enumerate() {
+        salt[i] = *b;
+    }
+    salt
+}
+
 impl WalletState {
     fn entry(&self) -> Result<Entry, String> {
         Entry::new(&self.keyring_service, &self.keyring_username).map_err(|e| e.to_string())
@@ -107,12 +124,24 @@ impl WalletState {
         })
     }
 
-    pub fn export_viewing_keys(&self, _password: String) -> Result<ViewingKeysResult, String> {
-        Err("Viewing keys export is not implemented yet".to_string())
+    pub fn export_viewing_keys(&self, password: String) -> Result<ViewingKeysResult, String> {
+        let enc = self.entry()?.get_password().map_err(|e| e.to_string())?;
+        let seed = Zeroizing::new(decrypt_seed(&enc, &password)?);
+
+        let fvk = derive_key_hex(&seed, b"praph_fvk_salt__")?;
+        let ivk = derive_key_hex(&seed, b"praph_ivk_salt__")?;
+        let ovk = derive_key_hex(&seed, b"praph_ovk_salt__")?;
+
+        Ok(ViewingKeysResult { fvk, ivk, ovk })
     }
 
-    pub fn export_tvk(&self, _tx_id: String, _password: String) -> Result<TvkResult, String> {
-        Err("TVK export is not implemented yet".to_string())
+    pub fn export_tvk(&self, tx_id: String, password: String) -> Result<TvkResult, String> {
+        let enc = self.entry()?.get_password().map_err(|e| e.to_string())?;
+        let seed = Zeroizing::new(decrypt_seed(&enc, &password)?);
+
+        let salt = salt16_from_str(&tx_id);
+        let tvk = derive_key_hex(&seed, &salt)?;
+        Ok(TvkResult { tvk })
     }
 }
 

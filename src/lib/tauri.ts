@@ -78,6 +78,16 @@ export interface ScanNotesParams {
   fullRescan: boolean;
 }
 
+export interface ViewingKeysResult {
+  fvk: string;
+  ivk: string;
+  ovk: string;
+}
+
+export interface TvkResult {
+  tvk: string;
+}
+
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && Boolean((window as any).__TAURI__);
 }
@@ -143,6 +153,11 @@ const tauriApi = {
 
   getSyncMetadata: () => invoke<SyncMetadata>("get_sync_metadata"),
   scanNotes: (params: ScanNotesParams) => invoke<SyncMetadata>("scan_notes", { params }),
+
+  exportViewingKeys: (password: string) =>
+    invoke<ViewingKeysResult>("export_viewing_keys", { password }),
+  exportTvk: (txId: string, password: string) =>
+    invoke<TvkResult>("export_tvk", { tx_id: txId, password }),
 };
 
 const mockApi = {
@@ -254,6 +269,19 @@ const mockApi = {
   scanNotes: async (_params: ScanNotesParams): Promise<SyncMetadata> => {
     await sleep(300);
     return { state: "idle", lastSyncedAt: Math.floor(Date.now() / 1000) };
+  },
+
+  exportViewingKeys: async (_password: string): Promise<ViewingKeysResult> => {
+    await sleep(150);
+    return {
+      fvk: "mock_fvk",
+      ivk: "mock_ivk",
+      ovk: "mock_ovk",
+    };
+  },
+  exportTvk: async (_txId: string, _password: string): Promise<TvkResult> => {
+    await sleep(150);
+    return { tvk: "mock_tvk" };
   },
 };
 
