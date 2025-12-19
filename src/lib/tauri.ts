@@ -101,32 +101,13 @@ let mockHasWallet = true;
 let mockHelperServiceUrl = "http://localhost:8081";
 
 let mockBalance: Balance = {
-  total: "42.0000 PRAF",
-  confirmed: "40.0000 PRAF",
-  pending: "2.0000 PRAF",
-  unspent: "40.0000 PRAF",
+  total: "0.0000 PRAF",
+  confirmed: "0.0000 PRAF",
+  pending: "0.0000 PRAF",
+  unspent: "0.0000 PRAF",
 };
 
-let mockTxs: TxSummary[] = [
-  {
-    id: "tx_demo_1",
-    direction: "incoming",
-    amount: "5.0000 PRAF",
-    fee: "0.0000 PRAF",
-    memo: "Demo incoming",
-    timestamp: Math.floor(Date.now() / 1000) - 3600,
-    status: "confirmed",
-  },
-  {
-    id: "tx_demo_2",
-    direction: "outgoing",
-    amount: "1.5000 PRAF",
-    fee: "0.0100 PRAF",
-    memo: "Demo outgoing",
-    timestamp: Math.floor(Date.now() / 1000) - 900,
-    status: "pending",
-  },
-];
+let mockTxs: TxSummary[] = [];
 
 const tauriApi = {
   appInfo: () => invoke<AppInfo>("app_info"),
@@ -213,44 +194,22 @@ const mockApi = {
   },
 
   sendTransaction: async (params: SendParams): Promise<SendResult> => {
-    await sleep(600);
-    const txId = `tx_demo_${Math.random().toString(16).slice(2)}`;
-    mockTxs = [
-      {
-        id: txId,
-        direction: "outgoing",
-        amount: `${params.amount} PRAF`,
-        fee: "0.0100 PRAF",
-        memo: params.memo,
-        timestamp: Math.floor(Date.now() / 1000),
-        status: "pending",
-      },
-      ...mockTxs,
-    ];
-    return { txId };
+    await sleep(100);
+    throw new Error(
+      "sendTransaction is only available in the Tauri desktop app (backend required)"
+    );
   },
 
   generateAddress: async (): Promise<AddressResult> => {
     await sleep(50);
-    return { address: "praph1q9d2...demo-address" };
+    return { address: "" };
   },
 
   bridgeDeposit: async (params: BridgeDepositParams): Promise<BridgeDepositResult> => {
-    await sleep(800);
-    const txId = `bridge_demo_${Math.random().toString(16).slice(2)}`;
-    mockTxs = [
-      {
-        id: txId,
-        direction: "outgoing",
-        amount: `${params.amount} PRAF`,
-        fee: "0.0200 PRAF",
-        memo: params.memo,
-        timestamp: Math.floor(Date.now() / 1000),
-        status: "pending",
-      },
-      ...mockTxs,
-    ];
-    return { txId };
+    await sleep(100);
+    throw new Error(
+      "bridgeDeposit is only available in the Tauri desktop app (backend required)"
+    );
   },
 
   getSettings: async (): Promise<Settings> => {
