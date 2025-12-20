@@ -128,6 +128,11 @@ export interface TvkResult {
   tvk: string;
 }
 
+export interface WalletUnlockParams {
+  password: string;
+  [key: string]: unknown;
+}
+
 function isTauriRuntime(): boolean {
   if (typeof window === "undefined") return false;
   const w = window as any;
@@ -156,19 +161,58 @@ let mockAccounts: AccountInfo[] = [
 ];
 let mockActiveAccountIndex = 0;
 
-const tauriApi = {
+interface WalletApi {
+  appInfo: () => Promise<AppInfo>;
+  walletStatus: () => Promise<WalletStatus>;
+  walletCreate: (password: string) => Promise<WalletCreateResult>;
+  walletImport: (mnemonic: string, password: string) => Promise<void>;
+  walletUnlock: (params: WalletUnlockParams) => Promise<void>;
+  walletLock: () => Promise<void>;
+  debugProbeSeedEntries: () => Promise<string[]>;
+  debugProbeSeedEntriesVerbose: () => Promise<Record<string, string[]>>;
+  debugKeychainRoundtrip: () => Promise<string>;
+  debugWalletSeedStorageStatus: () => Promise<Record<string, unknown>>;
+  getBalance: () => Promise<Balance>;
+  listTransactions: () => Promise<TxSummary[]>;
+  listTransactionsForActiveAccount: () => Promise<TxSummary[]>;
+  rescan: () => Promise<void>;
+  sendTransaction: (params: SendParams) => Promise<SendResult>;
+  mintDevFaucet: (params: MintDevFaucetParams) => Promise<MintDevFaucetResult>;
+  bridgeDeposit: (params: BridgeDepositParams) => Promise<BridgeDepositResult>;
+  generateAddress: () => Promise<AddressResult>;
+  getAccountsState: () => Promise<AccountsState>;
+  createAccount: () => Promise<AccountsState>;
+  createAccountNamed: (name: string) => Promise<AccountsState>;
+  switchAccount: (accountIndex: number) => Promise<AccountsState>;
+  getSettings: () => Promise<Settings>;
+  setHelperServiceUrl: (url: string) => Promise<void>;
+  getSyncMetadata: () => Promise<SyncMetadata>;
+  scanNotes: (params: ScanNotesParams) => Promise<SyncMetadata>;
+  exportViewingKeys: (password: string) => Promise<ViewingKeysResult>;
+  exportTvk: (txId: string, password: string) => Promise<TvkResult>;
+}
+
+const tauriApi: WalletApi = {
   appInfo: () => invokeSafe<AppInfo>("app_info"),
 
-  walletStatus: () => invokeSafe<WalletStatus>("wallet_status"),
+  walletStatus: () => invokeSafe<WalletStatus>("wallet_status_db"),
   walletCreate: (password: string) =>
     invokeSafe<WalletCreateResult>("wallet_create", { password }),
   walletImport: (mnemonic: string, password: string) =>
     invokeSafe<void>("wallet_import", { mnemonic, password }),
-  walletUnlock: (password: string) => invokeSafe<void>("wallet_unlock", { password }),
-  walletLock: () => invokeSafe<void>("wallet_lock"),
+  walletUnlock: (params: WalletUnlockParams) =>
+    invokeSafe<void>("wallet_unlock", { password: params.password }),
+  walletLock: () => invoke("wallet_lock"),
+
+  debugProbeSeedEntries: () => invoke("debug_probe_seed_entries"),
+  debugProbeSeedEntriesVerbose: () => invoke("debug_probe_seed_entries_verbose"),
+  debugKeychainRoundtrip: () => invoke("debug_keychain_roundtrip"),
+  debugWalletSeedStorageStatus: () => invoke("debug_wallet_seed_storage_status"),
 
   getBalance: () => invokeSafe<Balance>("get_balance"),
   listTransactions: () => invokeSafe<TxSummary[]>("list_transactions"),
+  listTransactionsForActiveAccount: () =>
+    invokeSafe<TxSummary[]>("list_transactions_for_active_account"),
   rescan: () => invokeSafe<void>("rescan"),
   sendTransaction: (params: SendParams) => invokeSafe<SendResult>("send_transaction", { params }),
   mintDevFaucet: (params: MintDevFaucetParams) =>
@@ -197,7 +241,7 @@ const tauriApi = {
     invokeSafe<TvkResult>("export_tvk", { tx_id: txId, password }),
 };
 
-const mockApi = {
+const mockApi: WalletApi = {
   appInfo: async (): Promise<AppInfo> => ({
     version: "0.0.0-dev",
     identifier: "mock.browser",
@@ -225,14 +269,42 @@ const mockApi = {
     await sleep(200);
   },
 
-  walletUnlock: async (_password: string): Promise<void> => {
-    mockUnlocked = true;
-    await sleep(150);
+  walletUnlock: async (_params: WalletUnlockParams): Promise<void> => {
+    await sleep(200);
+    throw new Error(
+      "walletUnlock is only available in the Tauri desktop app (backend required)"
+    );
   },
 
   walletLock: async (): Promise<void> => {
     mockUnlocked = false;
     await sleep(150);
+  },
+
+  debugProbeSeedEntries: async (): Promise<string[]> => {
+    await sleep(50);
+    return [];
+  },
+
+  debugProbeSeedEntriesVerbose: async (): Promise<Record<string, string[]>> => {
+    await sleep(50);
+    return { candidates: [], found: [], errors: [] };
+  },
+
+  debugKeychainRoundtrip: async (): Promise<string> => {
+    await sleep(50);
+    return "OK mock";
+  },
+
+  debugWalletSeedStorageStatus: async (): Promise<Record<string, unknown>> => {
+    await sleep(50);
+    return {
+      primaryReadable: false,
+      scanFound: false,
+      services: [],
+      usernames: [],
+      errors: [],
+    };
   },
 
   getBalance: async (): Promise<Balance> => {
@@ -241,6 +313,11 @@ const mockApi = {
   },
 
   listTransactions: async (): Promise<TxSummary[]> => {
+    await sleep(150);
+    return mockTxs;
+  },
+
+  listTransactionsForActiveAccount: async (): Promise<TxSummary[]> => {
     await sleep(150);
     return mockTxs;
   },
@@ -336,4 +413,4 @@ const mockApi = {
   },
 };
 
-export const api = isTauriRuntime() ? tauriApi : mockApi;
+export const api: WalletApi = isTauriRuntime() ? tauriApi : mockApi;

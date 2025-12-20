@@ -15,6 +15,70 @@ pub struct NoteRow {
     pub spent: bool,
 }
 
+pub fn list_transactions_for_account(
+    db: &DbState,
+    fingerprint: &str,
+    account_index: u32,
+) -> Result<Vec<TxSummary>, String> {
+    let mut out = Vec::new();
+
+    let notes = list_notes_for_fingerprint(db, fingerprint)?;
+    for n in notes {
+        out.push(TxSummary {
+            id: format!("note_{}", n.commitment),
+            direction: TxDirection::Incoming,
+            amount: format_amount_minor(n.amount_minor),
+            fee: "0.0000 PRAF".to_string(),
+            memo: n.memo,
+            timestamp: n.received_at,
+            status: TxStatus::Confirmed,
+        });
+    }
+
+    let conn = open_db(db)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, direction, amount, fee, memo, timestamp, status FROM transactions WHERE account_index=?1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![account_index as i64], |r| {
+            let direction: String = r.get(1)?;
+            let status: String = r.get(6)?;
+
+            let direction = match direction.as_str() {
+                "incoming" => TxDirection::Incoming,
+                "outgoing" => TxDirection::Outgoing,
+                _ => TxDirection::Outgoing,
+            };
+            let status = match status.as_str() {
+                "pending" => TxStatus::Pending,
+                "confirmed" => TxStatus::Confirmed,
+                "failed" => TxStatus::Failed,
+                _ => TxStatus::Failed,
+            };
+
+            Ok(TxSummary {
+                id: r.get(0)?,
+                direction,
+                amount: r.get(2)?,
+                fee: r.get(3)?,
+                memo: r.get(4)?,
+                timestamp: r.get::<_, i64>(5)? as u64,
+                status,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+
+    out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    Ok(out)
+}
+
 pub struct DbState {
     pub db_path: PathBuf,
 }
@@ -52,7 +116,8 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
             fee_minor INTEGER NOT NULL,\
             memo TEXT,\
             timestamp INTEGER NOT NULL,\
-            status TEXT NOT NULL\
+            status TEXT NOT NULL,\
+            account_index INTEGER NOT NULL\
         );\
         CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp DESC);\
         CREATE TABLE IF NOT EXISTS notes (\
@@ -75,6 +140,32 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
         );",
     )
     .map_err(|e| e.to_string())?;
+
+    // Migration: transactions.account_index for multi-account scoping.
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(transactions)")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut has_account_index = false;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let name: String = row.get(1).map_err(|e| e.to_string())?;
+            if name == "account_index" {
+                has_account_index = true;
+                break;
+            }
+        }
+        if !has_account_index {
+            conn.execute("ALTER TABLE transactions ADD COLUMN account_index INTEGER NOT NULL DEFAULT 0", [])
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Ensure index exists (safe for both new and migrated DBs).
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transactions_account_index ON transactions(account_index)",
+            [],
+        );
+    }
 
     // Lightweight migration: older wallets may not have the notes.nonce column.
     // We add it if missing.
@@ -103,6 +194,14 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
     Ok(())
 }
 
+pub fn get_encrypted_seed(db: &DbState) -> Result<Option<String>, String> {
+    get_setting(db, "encrypted_seed_v1")
+}
+
+pub fn set_encrypted_seed(db: &DbState, enc: String) -> Result<(), String> {
+    set_setting(db, "encrypted_seed_v1", &enc)
+}
+
 pub fn get_account_name_for_index(db: &DbState, account_index: u32) -> Result<Option<String>, String> {
     let key = account_name_key_for_index(account_index);
     get_setting(db, &key)
@@ -117,49 +216,51 @@ pub fn set_account_name_for_index(
     set_setting(db, &key, &name)
 }
 
-pub fn get_balance(db: &DbState) -> Result<Balance, String> {
+pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Result<Balance, String> {
     let conn = open_db(db)?;
 
     let incoming_notes_unspent: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM notes WHERE spent=0",
-            [],
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM notes WHERE spent=0 AND fingerprint=?1",
+            params![fingerprint],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
 
     let incoming_confirmed: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE direction='incoming' AND status='confirmed'",
-            [],
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE account_index=?1 AND direction='incoming' AND status='confirmed'",
+            params![account_index as i64],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
     let outgoing_confirmed: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(amount_minor + fee_minor), 0) FROM transactions WHERE direction='outgoing' AND status='confirmed'",
-            [],
+            "SELECT COALESCE(SUM(amount_minor + fee_minor), 0) FROM transactions WHERE account_index=?1 AND direction='outgoing' AND status='confirmed'",
+            params![account_index as i64],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
     let incoming_pending: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE direction='incoming' AND status='pending'",
-            [],
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE account_index=?1 AND direction='incoming' AND status='pending'",
+            params![account_index as i64],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
     let outgoing_pending: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(amount_minor + fee_minor), 0) FROM transactions WHERE direction='outgoing' AND status='pending'",
-            [],
+            "SELECT COALESCE(SUM(amount_minor + fee_minor), 0) FROM transactions WHERE account_index=?1 AND direction='outgoing' AND status='pending'",
+            params![account_index as i64],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
 
     let confirmed_net = incoming_confirmed + incoming_notes_unspent - outgoing_confirmed;
     let pending_net = incoming_pending - outgoing_pending;
-    let total = confirmed_net + pending_net;
+    // Total is the current wallet holdings (confirmed/unspent). Pending is shown separately.
+    // This avoids double-counting pending outgoing when UTXO set already reflects note spends.
+    let total = confirmed_net;
 
     Ok(Balance {
         total: format_amount_minor(total),
@@ -259,6 +360,64 @@ pub fn list_spendable_notes(db: &DbState) -> Result<Vec<SpendableNoteRow>, Strin
     Ok(out)
 }
 
+pub fn clear_notes_for_fingerprint(db: &DbState, fingerprint: &str) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute("DELETE FROM notes WHERE fingerprint=?1", params![fingerprint])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn clear_transactions_for_account(db: &DbState, account_index: u32) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute(
+        "DELETE FROM transactions WHERE account_index=?1",
+        params![account_index as i64],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn clear_account_history(
+    db: &DbState,
+    fingerprint: &str,
+    account_index: u32,
+) -> Result<(), String> {
+    clear_notes_for_fingerprint(db, fingerprint)?;
+    clear_transactions_for_account(db, account_index)?;
+    // Also clear sync progress so a full rescan starts from a clean slate.
+    let _ = set_setting(db, "last_scanned_height", "");
+    Ok(())
+}
+
+pub fn list_notes_for_fingerprint(db: &DbState, fingerprint: &str) -> Result<Vec<NoteRow>, String> {
+    let conn = open_db(db)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT commitment, commitment_index, amount_minor, memo, received_at, spent \
+             FROM notes WHERE fingerprint=?1 ORDER BY received_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![fingerprint], |r| {
+            Ok(NoteRow {
+                commitment: r.get(0)?,
+                commitment_index: r.get::<_, i64>(1)? as u64,
+                amount_minor: r.get(2)?,
+                memo: r.get(3)?,
+                received_at: r.get::<_, i64>(4)? as u64,
+                spent: r.get::<_, i64>(5)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 pub fn mark_notes_spent(db: &DbState, commitments: &[String]) -> Result<(), String> {
     if commitments.is_empty() {
         return Ok(());
@@ -283,6 +442,7 @@ pub fn confirm_pending(db: &DbState) -> Result<(), String> {
 pub fn insert_outgoing(
     db: &DbState,
     tx_id: String,
+    account_index: u32,
     amount: String,
     fee: String,
     memo: Option<String>,
@@ -293,8 +453,8 @@ pub fn insert_outgoing(
     let ts = crate::unix_ts() as i64;
 
     conn.execute(
-        "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status)\
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status, account_index)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             tx_id,
             "outgoing",
@@ -304,7 +464,8 @@ pub fn insert_outgoing(
             fee_minor,
             memo,
             ts,
-            "pending"
+            "pending",
+            account_index as i64
         ],
     )
     .map_err(|e| e.to_string())?;

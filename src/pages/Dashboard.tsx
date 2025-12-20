@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, MintDevFaucetParams } from "../lib/tauri";
 import { toast } from "sonner";
+import { useWalletStore } from "../state/walletStore";
 import {
   Card,
   CardContent,
@@ -25,6 +26,7 @@ import { Label } from "../components/ui/label";
 
 export default function DashboardPage() {
   const qc = useQueryClient();
+  const activeAccountIndex = useWalletStore((s) => s.activeAccountIndex);
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
   const [tvkOpen, setTvkOpen] = useState(false);
   const [tvkPassword, setTvkPassword] = useState("");
@@ -42,13 +44,13 @@ export default function DashboardPage() {
   });
 
   const balanceQuery = useQuery({
-    queryKey: ["balance"],
+    queryKey: ["balance", activeAccountIndex],
     queryFn: api.getBalance,
   });
 
   const txsQuery = useQuery({
-    queryKey: ["transactions"],
-    queryFn: api.listTransactions,
+    queryKey: ["transactions", activeAccountIndex],
+    queryFn: api.listTransactionsForActiveAccount,
   });
 
   const mintMutation = useMutation({
@@ -74,7 +76,7 @@ export default function DashboardPage() {
     },
   });
 
-  const selectedTx = (txsQuery.data ?? []).find((t) => t.id === selectedTxId) ?? null;
+  const selectedTx = ((txsQuery.data ?? []) as any[]).find((t) => t.id === selectedTxId) ?? null;
 
   function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" {
     if (status === "confirmed") return "default";

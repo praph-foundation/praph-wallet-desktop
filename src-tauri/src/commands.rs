@@ -108,6 +108,38 @@ fn encrypt_memo_v1(plaintext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Result
     Ok(out)
 }
 
+#[tauri::command]
+pub fn debug_keychain_roundtrip(wallet: tauri::State<'_, WalletState>) -> Result<String, String> {
+    wallet.debug_keychain_roundtrip()
+}
+
+#[tauri::command]
+pub fn debug_wallet_seed_storage_status(
+    wallet: tauri::State<'_, WalletState>,
+) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
+    let (primary_readable, scan_found, services, usernames, errors) =
+        wallet.debug_wallet_seed_storage_status()?;
+    let mut out = std::collections::HashMap::new();
+    out.insert(
+        "primaryReadable".to_string(),
+        serde_json::Value::Bool(primary_readable),
+    );
+    out.insert("scanFound".to_string(), serde_json::Value::Bool(scan_found));
+    out.insert(
+        "services".to_string(),
+        serde_json::Value::Array(services.into_iter().map(serde_json::Value::String).collect()),
+    );
+    out.insert(
+        "usernames".to_string(),
+        serde_json::Value::Array(usernames.into_iter().map(serde_json::Value::String).collect()),
+    );
+    out.insert(
+        "errors".to_string(),
+        serde_json::Value::Array(errors.into_iter().map(serde_json::Value::String).collect()),
+    );
+    Ok(out)
+}
+
 fn parse_amount_minor(amount: &str) -> i64 {
     let raw = amount.split_whitespace().next().unwrap_or("0");
     let (whole, frac) = match raw.split_once('.') {
@@ -201,14 +233,27 @@ pub async fn get_balance(
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
 ) -> Result<Balance, String> {
+    let active = db::get_active_account_index(&db)?;
     // Sync from helper-service so balance reflects the latest server-visible notes/nullifiers.
     let _ = scan_notes_impl(&wallet, &db, ScanNotesParams { full_rescan: false }).await?;
-    Ok(db::get_balance(&db)?)
+    let fingerprint = wallet.fingerprint_hex_for_index(active)?;
+    Ok(db::get_balance(&db, &fingerprint, active)?)
 }
 
 #[tauri::command]
 pub fn list_transactions(db: tauri::State<'_, DbState>) -> Result<Vec<TxSummary>, String> {
+    // Back-compat: if UI calls this without wallet state, return all.
     db::list_transactions(&db)
+}
+
+#[tauri::command]
+pub fn list_transactions_for_active_account(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<Vec<TxSummary>, String> {
+    let active = db::get_active_account_index(&db)?;
+    let fingerprint = wallet.fingerprint_hex_for_index(active)?;
+    db::list_transactions_for_account(&db, &fingerprint, active)
 }
 
 #[tauri::command]
@@ -355,24 +400,18 @@ async fn scan_notes_impl(
         last_scanned_height: current.last_scanned_height,
     };
     db::set_sync_metadata(db, &syncing)?;
-
-    let spending_key_bytes = {
-        let guard = wallet
-            .unlocked_seed
-            .lock()
-            .map_err(|_| "Wallet state lock poisoned".to_string())?;
-        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
-        if seed.len() < 32 {
-            return Err("Seed too short".to_string());
-        }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&seed[..32]);
-        out
-    };
+    let active_account_index = db::get_active_account_index(&db)?;
+    let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
     let spending_key = SpendingKey::from_bytes(spending_key_bytes);
     let fvk = spending_key.derive_full_viewing_key();
     let fingerprint_hex = hex::encode(fvk.fingerprint());
     let memo_key = *fvk.memo_key().as_bytes();
+
+    if params.full_rescan {
+        // Chain purge or user requested full rescan: clear stale local history so old outgoing txs
+        // don't keep subtracting from balance.
+        let _ = db::clear_account_history(db, &fingerprint_hex, active_account_index);
+    }
 
     let client = reqwest::Client::new();
     let url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
@@ -513,6 +552,8 @@ pub async fn send_transaction(
     use rand_chacha::ChaCha20Rng;
 
     let tx_id = db::random_id("tx");
+
+    let active_account_index = db::get_active_account_index(&db)?;
 
     let amount_display = if params.amount.contains(' ') {
         params.amount.clone()
@@ -865,7 +906,14 @@ pub async fn send_transaction(
         return Err(format!("prover rejected submission (status {status}): {text}"));
     }
 
-    db::insert_outgoing(&db, tx_id.clone(), amount_display, fee, params.memo.clone())?;
+    db::insert_outgoing(
+        &db,
+        tx_id.clone(),
+        active_account_index,
+        amount_display,
+        fee,
+        params.memo.clone(),
+    )?;
     let spent_commitments = selected.into_iter().map(|n| n.commitment).collect::<Vec<_>>();
     db::mark_notes_spent(&db, &spent_commitments)?;
 
@@ -1153,7 +1201,8 @@ pub fn bridge_deposit(
     let memo = params
         .memo
         .map(|m| format!("L2: {} · {m}", params.l2_address));
-    db::insert_outgoing(&db, tx_id.clone(), amount, fee, memo)?;
+    // Bridge deposit is currently account-agnostic; treat it as account 0.
+    db::insert_outgoing(&db, tx_id.clone(), 0, amount, fee, memo)?;
     Ok(BridgeDepositResult { tx_id })
 }
 
@@ -1163,12 +1212,27 @@ pub fn wallet_status(wallet: tauri::State<'_, WalletState>) -> Result<WalletStat
 }
 
 #[tauri::command]
+pub fn wallet_status_db(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<WalletStatus, String> {
+    let mut st = wallet.status()?;
+    if !st.has_wallet {
+        if db::get_encrypted_seed(&db)?.is_some() {
+            st.has_wallet = true;
+        }
+    }
+    Ok(st)
+}
+
+#[tauri::command]
 pub fn wallet_create(
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
     password: String,
 ) -> Result<WalletCreateResult, String> {
-    let res = wallet.create(password)?;
+    let (res, enc) = wallet.create_with_encrypted_seed(password)?;
+    let _ = db::set_encrypted_seed(&db, enc);
     let _ = db::set_account_count(&db, 1);
     let _ = db::set_active_account_index(&db, 0);
     let _ = db::set_account_name_for_index(&db, 0, "Account 1".to_string());
@@ -1185,7 +1249,8 @@ pub fn wallet_import(
     mnemonic: String,
     password: String,
 ) -> Result<(), String> {
-    wallet.import(mnemonic, password)?;
+    let enc = wallet.import_with_encrypted_seed(mnemonic, password)?;
+    let _ = db::set_encrypted_seed(&db, enc);
     let _ = db::set_account_count(&db, 1);
     let _ = db::set_active_account_index(&db, 0);
     let _ = db::set_account_name_for_index(&db, 0, "Account 1".to_string());
@@ -1196,8 +1261,52 @@ pub fn wallet_import(
 }
 
 #[tauri::command]
-pub fn wallet_unlock(wallet: tauri::State<'_, WalletState>, password: String) -> Result<(), String> {
-    wallet.unlock(password)
+pub fn wallet_unlock(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    password: String,
+) -> Result<(), String> {
+    match wallet.unlock(password.clone()) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if e.contains("Wallet seed not found in secure storage") {
+                if let Some(enc) = db::get_encrypted_seed(&db)? {
+                    return wallet.unlock_with_encrypted_seed(&enc, password);
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn debug_probe_seed_entries(wallet: tauri::State<'_, WalletState>) -> Result<Vec<String>, String> {
+    let found = wallet.probe_seed_entries()?;
+    Ok(found
+        .into_iter()
+        .map(|(service, username)| format!("{service}::{username}"))
+        .collect())
+}
+
+#[tauri::command]
+pub fn debug_probe_seed_entries_verbose(
+    wallet: tauri::State<'_, WalletState>,
+) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    let (candidates, found, errors) = wallet.probe_seed_entries_verbose()?;
+    let mut out = std::collections::HashMap::new();
+    out.insert(
+        "candidates".to_string(),
+        candidates
+            .into_iter()
+            .map(|(s, u)| format!("{s}::{u}"))
+            .collect(),
+    );
+    out.insert(
+        "found".to_string(),
+        found.into_iter().map(|(s, u)| format!("{s}::{u}")).collect(),
+    );
+    out.insert("errors".to_string(), errors);
+    Ok(out)
 }
 
 #[tauri::command]

@@ -132,12 +132,39 @@ export default function OnboardingPage() {
                   setError(null);
                   setLoading(true);
 
+                  const normalizedPassword = password.trim();
+
                   if (mode === "create") {
                     if (!createdMnemonic) {
-                      const res = await api.walletCreate(password);
+                      const res = await api.walletCreate(normalizedPassword);
                       setCreatedMnemonic(res.mnemonic);
                       setBackedUp(false);
                       toast.success("Wallet created");
+
+                      // Backend verifies keychain persistence via read-back.
+                      // Use walletStatus as a lightweight sanity check to avoid false-negative probes.
+                      try {
+                        const st = await api.walletStatus();
+                        if (!st.hasWallet) {
+                          let extra = "";
+                          try {
+                            const dbg = await api.debugWalletSeedStorageStatus();
+                            console.warn("Wallet seed storage status:", dbg);
+                            extra = ` primaryReadable=${String((dbg as any).primaryReadable)} scanFound=${String((dbg as any).scanFound)}`;
+                            const errs = (dbg as any).errors as unknown;
+                            if (Array.isArray(errs) && errs.length > 0) {
+                              extra += ` firstError=${String(errs[0])}`;
+                            }
+                          } catch {
+                            // ignore
+                          }
+                          toast.error(
+                            `Secure storage write failed: wallet seed not found after create.${extra}`
+                          );
+                        }
+                      } catch {
+                        // ignore; create succeeded
+                      }
                       return;
                     }
                     setHasWallet(true);
@@ -146,8 +173,32 @@ export default function OnboardingPage() {
                     return;
                   }
 
-                  await api.walletImport(mnemonic.trim(), password);
+                  await api.walletImport(mnemonic.trim(), normalizedPassword);
                   toast.success("Wallet imported");
+
+                  // Backend verifies keychain persistence via read-back.
+                  try {
+                    const st = await api.walletStatus();
+                    if (!st.hasWallet) {
+                      let extra = "";
+                      try {
+                        const dbg = await api.debugWalletSeedStorageStatus();
+                        console.warn("Wallet seed storage status:", dbg);
+                        extra = ` primaryReadable=${String((dbg as any).primaryReadable)} scanFound=${String((dbg as any).scanFound)}`;
+                        const errs = (dbg as any).errors as unknown;
+                        if (Array.isArray(errs) && errs.length > 0) {
+                          extra += ` firstError=${String(errs[0])}`;
+                        }
+                      } catch {
+                        // ignore
+                      }
+                      toast.error(
+                        `Secure storage write failed: wallet seed not found after import.${extra}`
+                      );
+                    }
+                  } catch {
+                    // ignore; import succeeded
+                  }
 
                   try {
                     setSyncStatus("syncing", "Rescanning...");

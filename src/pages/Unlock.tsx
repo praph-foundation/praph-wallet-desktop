@@ -21,20 +21,61 @@ export default function UnlockPage() {
     try {
       setError(null);
       setLoading(true);
-      await api.walletUnlock(password.trim());
+      await api.walletUnlock({ password: password.trim() });
       unlock();
       toast.success("Wallet unlocked");
       navigate("/", { replace: true });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to unlock";
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "string"
+            ? e
+            : e && typeof e === "object" && "message" in (e as any)
+              ? String((e as any).message)
+              : JSON.stringify(e);
+
+      if (msg.includes("Wallet seed not found in secure storage")) {
+        try {
+          const probe = await api.debugProbeSeedEntriesVerbose();
+          console.warn("Keychain seed probe (verbose):", probe);
+          const found = probe.found ?? [];
+          const errors = probe.errors ?? [];
+          if (errors.length > 0) {
+            toast.error(
+              `Wallet seed probe hit keychain errors (likely permission/ACL). First error: ${errors[0]}`
+            );
+          } else {
+            toast.error(
+              found.length > 0
+                ? `Wallet seed not found. Found keychain entries: ${found.join(", ")}`
+                : "Wallet seed not found. No matching keychain entries detected (probe empty)."
+            );
+          }
+
+          try {
+            const dbg = await api.debugWalletSeedStorageStatus();
+            console.warn("Wallet seed storage status:", dbg);
+          } catch {
+            // ignore
+          }
+        } catch (probeErr) {
+          console.warn("Keychain seed probe failed:", probeErr);
+        }
+      }
       // If the seed is missing from secure storage, the user must re-onboard/import.
-      if (msg.includes("No matching entry found in secure storage")) {
+      if (
+        msg.includes("No matching entry found in secure storage") ||
+        msg.includes("Wallet seed not found in secure storage")
+      ) {
         setHasWallet(false);
         toast.error("Wallet seed not found in secure storage. Please create/import again.");
         navigate("/onboarding", { replace: true });
-        return;
+        setError(msg || "Unlock failed");
+      } else {
+        setError(msg || "Unlock failed");
+        toast.error(msg || "Unlock failed");
       }
-      setError(msg);
     } finally {
       setLoading(false);
     }
