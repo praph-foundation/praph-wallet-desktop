@@ -334,15 +334,19 @@ export default function AppLayout() {
                   size="sm"
                   variant="destructive"
                   onClick={async () => {
-                    if (!confirm("Logout will remove this wallet from this device. Continue?")) {
-                      return;
-                    }
+                    // Optimistic UI: immediately reset local app state so the user can re-onboard.
+                    lock();
+                    setHasWallet(false);
+                    navigate("/onboarding", { replace: true });
                     try {
                       await api.walletLogout();
+                      toast.success("Logged out");
+                    } catch (e) {
+                      toast.error(
+                        e instanceof Error ? e.message : "Logout failed"
+                      );
                     } finally {
-                      lock();
-                      setHasWallet(false);
-                      navigate("/onboarding", { replace: true });
+                      // keep optimistic state
                     }
                   }}
                 >
