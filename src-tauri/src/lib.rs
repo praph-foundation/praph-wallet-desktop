@@ -74,6 +74,7 @@ pub fn run() {
             commands::debug_keychain_roundtrip,
             commands::debug_wallet_seed_storage_status,
             commands::wallet_lock,
+            commands::wallet_logout,
             commands::get_balance,
             commands::list_transactions,
             commands::list_transactions_for_active_account,

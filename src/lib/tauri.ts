@@ -168,6 +168,7 @@ interface WalletApi {
   walletImport: (mnemonic: string, password: string) => Promise<void>;
   walletUnlock: (params: WalletUnlockParams) => Promise<void>;
   walletLock: () => Promise<void>;
+  walletLogout: () => Promise<void>;
   debugProbeSeedEntries: () => Promise<string[]>;
   debugProbeSeedEntriesVerbose: () => Promise<Record<string, string[]>>;
   debugKeychainRoundtrip: () => Promise<string>;
@@ -203,6 +204,7 @@ const tauriApi: WalletApi = {
   walletUnlock: (params: WalletUnlockParams) =>
     invokeSafe<void>("wallet_unlock", { password: params.password }),
   walletLock: () => invoke("wallet_lock"),
+  walletLogout: () => invokeSafe<void>("wallet_logout"),
 
   debugProbeSeedEntries: () => invoke("debug_probe_seed_entries"),
   debugProbeSeedEntriesVerbose: () => invoke("debug_probe_seed_entries_verbose"),
@@ -279,6 +281,12 @@ const mockApi: WalletApi = {
   walletLock: async (): Promise<void> => {
     mockUnlocked = false;
     await sleep(150);
+  },
+
+  walletLogout: async (): Promise<void> => {
+    mockHasWallet = false;
+    mockUnlocked = false;
+    await sleep(100);
   },
 
   debugProbeSeedEntries: async (): Promise<string[]> => {

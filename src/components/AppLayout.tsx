@@ -22,6 +22,7 @@ export default function AppLayout() {
   const location = useLocation();
   const lockState = useWalletStore((s) => s.lockState);
   const lock = useWalletStore((s) => s.lock);
+  const setHasWallet = useWalletStore((s) => s.setHasWallet);
   const syncStatus = useWalletStore((s) => s.syncStatus);
   const syncMessage = useWalletStore((s) => s.syncMessage);
   const accounts = useWalletStore((s) => s.accounts);
@@ -327,6 +328,25 @@ export default function AppLayout() {
                   }}
                 >
                   {lockState === "locked" ? "Unlock" : "Lock"}
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={async () => {
+                    if (!confirm("Logout will remove this wallet from this device. Continue?")) {
+                      return;
+                    }
+                    try {
+                      await api.walletLogout();
+                    } finally {
+                      lock();
+                      setHasWallet(false);
+                      navigate("/onboarding", { replace: true });
+                    }
+                  }}
+                >
+                  Logout
                 </Button>
               </div>
             </CardContent>

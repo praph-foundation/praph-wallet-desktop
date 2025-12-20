@@ -207,7 +207,12 @@ impl WalletState {
             for username in usernames.iter() {
                 let entry = self.entry_for_service_and_username(&service, &username)?;
                 match entry.get_password() {
-                    Ok(enc) => return Ok(((service.clone(), username.clone()), enc)),
+                    Ok(enc) => {
+                        if enc.trim().is_empty() {
+                            continue;
+                        }
+                        return Ok(((service.clone(), username.clone()), enc));
+                    }
                     Err(keyring::Error::NoEntry) => continue,
                     Err(e) => {
                         non_noentry_errors.push(format!(
@@ -393,6 +398,22 @@ impl WalletState {
             .lock()
             .map_err(|_| "Wallet state lock poisoned".to_string())?;
         *guard = None;
+        Ok(())
+    }
+
+    pub fn delete_seed_from_secure_storage(&self) -> Result<(), String> {
+        // Best-effort: remove any entries across candidate services/usernames.
+        for service in self.candidate_services() {
+            for username in self.candidate_usernames() {
+                let entry = self.entry_for_service_and_username(&service, &username)?;
+                // This keyring crate version does not expose a delete API.
+                // Overwrite with empty string and treat empty as missing in reads.
+                let _ = entry.set_password("");
+            }
+        }
+
+        // Also clear in-memory seed.
+        let _ = self.lock();
         Ok(())
     }
 

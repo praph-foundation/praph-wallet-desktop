@@ -194,6 +194,14 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
     Ok(())
 }
 
+pub fn reset_wallet_data(db: &DbState) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute("DELETE FROM notes", []).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM transactions", []).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM settings", []).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn get_encrypted_seed(db: &DbState) -> Result<Option<String>, String> {
     get_setting(db, "encrypted_seed_v1")
 }

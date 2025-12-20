@@ -1146,7 +1146,7 @@ pub async fn mint_dev_faucet(
     // Otherwise scan_notes may return no notes and the UI won't show updated balance.
     {
         use tokio::time::{sleep, Duration, Instant};
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_secs(180);
         loop {
             let resp = http
                 .post(&helper_url)
@@ -1173,10 +1173,9 @@ pub async fn mint_dev_faucet(
             }
 
             if Instant::now() >= deadline {
-                return Err(format!(
-                    "timeout waiting for helper-service to index minted note_commitment={}",
-                    output_commitment_hex
-                ));
+                // Indexing can lag behind prover acceptance. Don't hard-fail mint; return success
+                // and let periodic scan/rescan pick it up later.
+                break;
             }
             sleep(Duration::from_secs(2)).await;
         }
@@ -1312,6 +1311,17 @@ pub fn debug_probe_seed_entries_verbose(
 #[tauri::command]
 pub fn wallet_lock(wallet: tauri::State<'_, WalletState>) -> Result<(), String> {
     wallet.lock()
+}
+
+#[tauri::command]
+pub fn wallet_logout(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<(), String> {
+    let _ = wallet.delete_seed_from_secure_storage();
+    let _ = wallet.lock();
+    db::reset_wallet_data(&db)?;
+    Ok(())
 }
 
 #[tauri::command]
