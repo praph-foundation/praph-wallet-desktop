@@ -224,15 +224,18 @@ impl WalletState {
             }
         }
 
-        eprintln!(
-            "wallet seed lookup: no entry found. candidates services={:?} usernames={:?}",
-            services, usernames
-        );
-        if !non_noentry_errors.is_empty() {
+        let debug_enabled = std::env::var("PRAPH_WALLET_DEBUG").ok().as_deref() == Some("1");
+        if debug_enabled {
             eprintln!(
-                "wallet seed lookup: encountered non-NoEntry keychain errors: {:?}",
-                non_noentry_errors
+                "wallet seed lookup: no entry found. candidates services={:?} usernames={:?}",
+                services, usernames
             );
+            if !non_noentry_errors.is_empty() {
+                eprintln!(
+                    "wallet seed lookup: encountered non-NoEntry keychain errors: {:?}",
+                    non_noentry_errors
+                );
+            }
         }
         Err("Wallet seed not found in secure storage. Please create/import again.".to_string())
     }
