@@ -506,32 +506,59 @@ async fn scan_notes_impl(
     // Check pending transactions and confirm if their nullifiers are on-chain
     let pending_txs = db::get_pending_transactions_with_nullifiers(db)?;
     for (tx_id, nullifiers) in pending_txs {
+        if nullifiers.is_empty() {
+            continue;
+        }
+        
         let mut all_confirmed = true;
         for nullifier_hex in nullifiers {
             let status_req = HelperRequest::GetNullifierStatus {
-                nullifier: nullifier_hex,
+                nullifier: nullifier_hex.clone(),
             };
-            let status_resp = client
+            let status_resp = match client
                 .post(&url)
                 .json(&status_req)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
-            let status_resp: HelperResponse = status_resp.json().await.map_err(|e| e.to_string())?;
-            let exists = match status_resp {
-                HelperResponse::GetNullifierStatusResult { exists } => exists,
-                HelperResponse::Error { message } => {
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Failed to check nullifier status for tx {}: {}", tx_id, e);
                     all_confirmed = false;
                     break;
                 }
-                _ => false,
             };
+            
+            let status_resp: HelperResponse = match status_resp.json().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Failed to parse nullifier status response for tx {}: {}", tx_id, e);
+                    all_confirmed = false;
+                    break;
+                }
+            };
+            
+            let exists = match status_resp {
+                HelperResponse::GetNullifierStatusResult { exists } => exists,
+                HelperResponse::Error { message } => {
+                    eprintln!("Helper service error checking nullifier for tx {}: {}", tx_id, message);
+                    all_confirmed = false;
+                    break;
+                }
+                _ => {
+                    eprintln!("Unexpected response checking nullifier for tx {}", tx_id);
+                    false
+                }
+            };
+            
             if !exists {
                 all_confirmed = false;
                 break;
             }
         }
+        
         if all_confirmed {
+            eprintln!("Confirming transaction: {}", tx_id);
             db::confirm_transaction_by_id(db, &tx_id)?;
         }
     }

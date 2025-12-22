@@ -251,7 +251,8 @@ pub fn set_account_name_for_index(
 pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Result<Balance, String> {
     let conn = open_db(db)?;
 
-    let incoming_notes_unspent: i64 = conn
+    // Use UTXO model: balance is simply unspent notes
+    let unspent_notes: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(amount_minor), 0) FROM notes WHERE spent=0 AND fingerprint=?1",
             params![fingerprint],
@@ -259,27 +260,7 @@ pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Resul
         )
         .map_err(|e| e.to_string())?;
 
-    let incoming_confirmed: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE account_index=?1 AND direction='incoming' AND status='confirmed'",
-            params![account_index as i64],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let outgoing_confirmed: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(amount_minor + fee_minor), 0) FROM transactions WHERE account_index=?1 AND direction='outgoing' AND status='confirmed'",
-            params![account_index as i64],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let incoming_pending: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE account_index=?1 AND direction='incoming' AND status='pending'",
-            params![account_index as i64],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    // Pending outgoing transactions that haven't been confirmed yet
     let outgoing_pending: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(amount_minor + fee_minor), 0) FROM transactions WHERE account_index=?1 AND direction='outgoing' AND status='pending'",
@@ -288,17 +269,17 @@ pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Resul
         )
         .map_err(|e| e.to_string())?;
 
-    let confirmed_net = incoming_confirmed + incoming_notes_unspent - outgoing_confirmed;
-    let pending_net = incoming_pending - outgoing_pending;
-    // Total is the current wallet holdings (confirmed/unspent). Pending is shown separately.
-    // This avoids double-counting pending outgoing when UTXO set already reflects note spends.
-    let total = confirmed_net;
+    // Confirmed balance is unspent notes (already reflects confirmed transactions)
+    let confirmed_balance = unspent_notes;
+    
+    // Pending shows how much is being sent (negative for outgoing)
+    let pending_balance = -outgoing_pending;
 
     Ok(Balance {
-        total: format_amount_minor(total),
-        confirmed: format_amount_minor(confirmed_net),
-        pending: format_amount_minor(pending_net),
-        unspent: format_amount_minor(confirmed_net),
+        total: format_amount_minor(confirmed_balance),
+        confirmed: format_amount_minor(confirmed_balance),
+        pending: format_amount_minor(pending_balance),
+        unspent: format_amount_minor(confirmed_balance),
     })
 }
 
