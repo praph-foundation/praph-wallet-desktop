@@ -171,6 +171,26 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
         );
     }
 
+    // Migration: transactions.nullifiers for tracking spent nullifiers.
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(transactions)")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut has_nullifiers = false;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let name: String = row.get(1).map_err(|e| e.to_string())?;
+            if name == "nullifiers" {
+                has_nullifiers = true;
+                break;
+            }
+        }
+        if !has_nullifiers {
+            conn.execute("ALTER TABLE transactions ADD COLUMN nullifiers TEXT", [])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
     // Lightweight migration: older wallets may not have the notes.nonce column.
     // We add it if missing.
     {
