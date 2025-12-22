@@ -120,7 +120,8 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
             memo TEXT,\
             timestamp INTEGER NOT NULL,\
             status TEXT NOT NULL,\
-            account_index INTEGER NOT NULL\
+            account_index INTEGER NOT NULL,\
+            nullifiers TEXT\
         );\
         CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp DESC);\
         CREATE TABLE IF NOT EXISTS notes (\
@@ -453,6 +454,39 @@ pub fn confirm_pending(db: &DbState) -> Result<(), String> {
     Ok(())
 }
 
+pub fn get_pending_transactions_with_nullifiers(db: &DbState) -> Result<Vec<(String, Vec<String>)>, String> {
+    let conn = open_db(db)?;
+    let mut stmt = conn
+        .prepare("SELECT id, nullifiers FROM transactions WHERE status='pending' AND nullifiers IS NOT NULL")
+        .map_err(|e| e.to_string())?;
+    
+    let rows = stmt
+        .query_map([], |r| {
+            let tx_id: String = r.get(0)?;
+            let nullifiers_json: Option<String> = r.get(1)?;
+            Ok((tx_id, nullifiers_json))
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut result = Vec::new();
+    for row in rows {
+        let (tx_id, nullifiers_json) = row.map_err(|e| e.to_string())?;
+        if let Some(json) = nullifiers_json {
+            if let Ok(nullifiers) = serde_json::from_str::<Vec<String>>(&json) {
+                result.push((tx_id, nullifiers));
+            }
+        }
+    }
+    Ok(result)
+}
+
+pub fn confirm_transaction_by_id(db: &DbState, tx_id: &str) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute("UPDATE transactions SET status='confirmed' WHERE id=?1", params![tx_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn insert_outgoing(
     db: &DbState,
     tx_id: String,
@@ -461,15 +495,17 @@ pub fn insert_outgoing(
     fee: String,
     memo: Option<String>,
     status: &str,
+    nullifiers: Option<Vec<String>>,
 ) -> Result<(), String> {
     let conn = open_db(db)?;
     let amount_minor = parse_amount_minor(&amount);
     let fee_minor = parse_amount_minor(&fee);
     let ts = crate::unix_ts() as i64;
+    let nullifiers_json = nullifiers.map(|n| serde_json::to_string(&n).unwrap_or_default());
 
     conn.execute(
-        "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status, account_index)\
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status, account_index, nullifiers)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             tx_id,
             "outgoing",
@@ -480,7 +516,8 @@ pub fn insert_outgoing(
             memo,
             ts,
             status,
-            account_index as i64
+            account_index as i64,
+            nullifiers_json
         ],
     )
     .map_err(|e| e.to_string())?;

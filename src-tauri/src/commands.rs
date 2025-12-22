@@ -503,6 +503,39 @@ async fn scan_notes_impl(
         max_idx = Some(max_idx.map(|m| m.max(note.commitment_index)).unwrap_or(note.commitment_index));
     }
 
+    // Check pending transactions and confirm if their nullifiers are on-chain
+    let pending_txs = db::get_pending_transactions_with_nullifiers(db)?;
+    for (tx_id, nullifiers) in pending_txs {
+        let mut all_confirmed = true;
+        for nullifier_hex in nullifiers {
+            let status_req = HelperRequest::GetNullifierStatus {
+                nullifier: nullifier_hex,
+            };
+            let status_resp = client
+                .post(&url)
+                .json(&status_req)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let status_resp: HelperResponse = status_resp.json().await.map_err(|e| e.to_string())?;
+            let exists = match status_resp {
+                HelperResponse::GetNullifierStatusResult { exists } => exists,
+                HelperResponse::Error { message } => {
+                    all_confirmed = false;
+                    break;
+                }
+                _ => false,
+            };
+            if !exists {
+                all_confirmed = false;
+                break;
+            }
+        }
+        if all_confirmed {
+            db::confirm_transaction_by_id(db, &tx_id)?;
+        }
+    }
+
     let done = SyncMetadata {
         state: SyncState::Idle,
         message: None,
@@ -894,6 +927,10 @@ pub async fn send_transaction(
         return Err(format!("prover rejected submission (status {status}): {text}"));
     }
 
+    let nullifier_hexs: Vec<String> = spend_nullifiers.iter()
+        .map(|n| hex::encode(fr_to_bytes(n)))
+        .collect();
+    
     db::insert_outgoing(
         &db,
         tx_id.clone(),
@@ -901,7 +938,8 @@ pub async fn send_transaction(
         amount_display,
         fee,
         params.memo.clone(),
-        "confirmed",
+        "pending",
+        Some(nullifier_hexs),
     )?;
     let spent_commitments = selected.into_iter().map(|n| n.commitment).collect::<Vec<_>>();
     db::mark_notes_spent(&db, &spent_commitments)?;
@@ -1179,7 +1217,7 @@ pub fn bridge_deposit(
         .memo
         .map(|m| format!("L2: {} · {m}", params.l2_address));
     // Bridge deposit is currently account-agnostic; treat it as account 0.
-    db::insert_outgoing(&db, tx_id.clone(), 0, amount, fee, memo, "pending")?;
+    db::insert_outgoing(&db, tx_id.clone(), 0, amount, fee, memo, "pending", None)?;
     Ok(BridgeDepositResult { tx_id })
 }
 
