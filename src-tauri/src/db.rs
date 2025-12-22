@@ -24,6 +24,9 @@ pub fn list_transactions_for_account(
 
     let notes = list_notes_for_fingerprint(db, fingerprint)?;
     for n in notes {
+        if n.memo.as_deref() == Some("change") {
+            continue;
+        }
         out.push(TxSummary {
             id: format!("note_{}", n.commitment),
             direction: TxDirection::Incoming,
@@ -283,6 +286,9 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
 
     let notes = list_notes(db)?;
     for n in notes {
+        if n.memo.as_deref() == Some("change") {
+            continue;
+        }
         out.push(TxSummary {
             id: format!("note_{}", n.commitment),
             direction: TxDirection::Incoming,
