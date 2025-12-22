@@ -454,6 +454,7 @@ pub fn insert_outgoing(
     amount: String,
     fee: String,
     memo: Option<String>,
+    status: &str,
 ) -> Result<(), String> {
     let conn = open_db(db)?;
     let amount_minor = parse_amount_minor(&amount);
@@ -472,7 +473,7 @@ pub fn insert_outgoing(
             fee_minor,
             memo,
             ts,
-            "pending",
+            status,
             account_index as i64
         ],
     )

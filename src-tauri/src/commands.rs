@@ -901,6 +901,7 @@ pub async fn send_transaction(
         amount_display,
         fee,
         params.memo.clone(),
+        "confirmed",
     )?;
     let spent_commitments = selected.into_iter().map(|n| n.commitment).collect::<Vec<_>>();
     db::mark_notes_spent(&db, &spent_commitments)?;
@@ -1178,7 +1179,7 @@ pub fn bridge_deposit(
         .memo
         .map(|m| format!("L2: {} · {m}", params.l2_address));
     // Bridge deposit is currently account-agnostic; treat it as account 0.
-    db::insert_outgoing(&db, tx_id.clone(), 0, amount, fee, memo)?;
+    db::insert_outgoing(&db, tx_id.clone(), 0, amount, fee, memo, "pending")?;
     Ok(BridgeDepositResult { tx_id })
 }
 
