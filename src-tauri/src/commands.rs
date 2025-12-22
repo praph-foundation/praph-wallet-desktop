@@ -951,19 +951,8 @@ pub async fn mint_dev_faucet(
     }
     let amount_minor_u128 = amount_minor_i64 as u128;
 
-    let spending_key_bytes = {
-        let guard = wallet
-            .unlocked_seed
-            .lock()
-            .map_err(|_| "Wallet state lock poisoned".to_string())?;
-        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
-        if seed.len() < 32 {
-            return Err("Seed too short".to_string());
-        }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&seed[..32]);
-        out
-    };
+    let active_account_index = db::get_active_account_index(&db)?;
+    let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
     let to_sk = SpendingKey::from_bytes(spending_key_bytes);
     let to_fvk = to_sk.derive_full_viewing_key();
 
