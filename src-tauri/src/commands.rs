@@ -385,7 +385,7 @@ async fn scan_notes_impl(
     db: &DbState,
     params: ScanNotesParams,
 ) -> Result<SyncMetadata, String> {
-    use praph_circuits::hash::{fr_from_u64, fr_to_bytes};
+    use praph_circuits::hash::{fr_from_bytes, fr_from_u64, fr_to_bytes};
     use praph_circuits::keys::IncomingViewingKey;
     use praph_circuits::keys::SpendingKey;
     use praph_circuits::note::Note;
@@ -568,19 +568,7 @@ pub async fn send_transaction(
 
     let fee = "0.0100 PRAF".to_string();
 
-    let spending_key_bytes = {
-        let guard = wallet
-            .unlocked_seed
-            .lock()
-            .map_err(|_| "Wallet state lock poisoned".to_string())?;
-        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
-        if seed.len() < 32 {
-            return Err("Seed too short".to_string());
-        }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&seed[..32]);
-        out
-    };
+    let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
     let sender_sk = SpendingKey::from_bytes(spending_key_bytes);
     let sender_fvk = sender_sk.derive_full_viewing_key();
 
