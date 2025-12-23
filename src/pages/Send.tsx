@@ -27,7 +27,6 @@ import {
 import {
   Send as SendIcon,
   ArrowRight,
-  Info,
   AlertTriangle,
   Wallet,
   Zap,
@@ -129,31 +128,34 @@ export default function SendPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        <Card className="lg:col-span-3 border-none bg-background/50 backdrop-blur-md shadow-xl ring-1 ring-white/5 overflow-hidden">
-          <CardHeader className="bg-white/5 border-b border-white/5">
-            <CardTitle className="text-xl">Transaction Details</CardTitle>
-            <CardDescription>Enter the recipient details and amount below.</CardDescription>
+        <Card className="lg:col-span-3 border border-white/10 bg-gradient-to-br from-background/80 via-background/60 to-background/80 backdrop-blur-xl shadow-2xl overflow-hidden">
+          <CardHeader className="bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border-b border-white/10 pb-6">
+            <CardTitle className="text-2xl font-bold bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">Transaction Details</CardTitle>
+            <CardDescription className="text-sm text-muted-foreground/80">Enter the recipient details and amount below.</CardDescription>
           </CardHeader>
-          <CardContent className="pt-8 space-y-6">
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between px-1">
-                  <Label htmlFor="to" className="text-sm font-semibold">Recipient Address</Label>
+          <CardContent className="pt-8 space-y-6 px-6 pb-8">
+            <div className="space-y-6">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="to" className="text-sm font-bold text-foreground/90 flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-primary" />
+                    Recipient Address
+                  </Label>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground font-medium">Quick Select:</span>
+                    <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Quick Select</span>
                     <Select
                       value=""
                       onValueChange={(address) => setTo(address)}
                       disabled={loading || progress === "done"}
                     >
-                      <SelectTrigger className="w-[180px] h-8 text-xs bg-white/5 border-none ring-1 ring-white/10">
+                      <SelectTrigger className="w-[160px] h-8 text-xs bg-gradient-to-r from-primary/10 to-primary/5 border border-primary/20 ring-0 hover:border-primary/40 transition-colors">
                         <SelectValue placeholder="My Accounts" />
                       </SelectTrigger>
                       <SelectContent>
                         {accountsState?.accounts.map((account) => (
                           <SelectItem key={account.index} value={account.address}>
-                            <div className="flex flex-col items-start">
-                              <span className="font-medium">{account.name}</span>
+                            <div className="flex flex-col items-start gap-0.5">
+                              <span className="font-semibold text-foreground">{account.name}</span>
                               <span className="text-[10px] text-muted-foreground font-mono truncate max-w-[150px]">
                                 {account.address.slice(0, 10)}...{account.address.slice(-8)}
                               </span>
@@ -165,56 +167,55 @@ export default function SendPage() {
                   </div>
                 </div>
                 <div className="relative group">
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2">
-                    <Wallet className={`w-4 h-4 transition-colors ${to ? 'text-primary' : 'text-muted-foreground'}`} />
-                  </div>
+                  <div className="absolute inset-0 bg-gradient-to-r from-primary/20 via-primary/10 to-transparent opacity-0 group-hover:opacity-100 rounded-lg transition-opacity pointer-events-none" />
                   <Input
                     id="to"
                     value={to}
                     onChange={(e) => setTo(e.target.value)}
                     placeholder="Enter PRAF address or IVK"
-                    className="pl-10 h-12 bg-white/5 border-none ring-1 ring-white/10 focus-visible:ring-primary transition-all"
+                    className="h-14 bg-white/5 border border-white/10 ring-0 focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary/50 transition-all text-sm font-mono placeholder:text-muted-foreground/50"
                     disabled={loading || progress === "done"}
                   />
                   {to && !isValidAddress && (
-                    <p className="mt-1.5 px-1 text-[10px] text-destructive flex items-center gap-1 font-medium italic">
-                      <AlertTriangle className="w-3 h-3" /> Invalid address format
+                    <p className="mt-2 px-1 text-xs text-red-500 flex items-center gap-1.5 font-semibold">
+                      <AlertTriangle className="w-3.5 h-3.5" /> Invalid address format
                     </p>
                   )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="amount" className="text-sm font-semibold px-1">Amount ($PRAF)</Label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  <Label htmlFor="amount" className="text-sm font-bold text-foreground/90">Amount</Label>
                   <div className="relative group">
+                    <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/20 via-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 rounded-lg transition-opacity pointer-events-none" />
                     <Input
                       id="amount"
                       type="number"
                       value={amount}
                       onChange={(e) => setAmount(e.target.value)}
                       placeholder="0.00"
-                      className="h-12 bg-white/5 border-none ring-1 ring-white/10 focus-visible:ring-primary pr-16"
+                      className="h-14 bg-white/5 border border-white/10 ring-0 focus-visible:ring-2 focus-visible:ring-emerald-500/50 focus-visible:border-emerald-500/50 pr-16 text-lg font-semibold transition-all"
                       disabled={loading || progress === "done"}
                     />
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground opacity-50">
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-emerald-500/70">
                       PRAF
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label className="text-sm font-semibold px-1">Prover Tip (Priority)</Label>
-                  <div className="grid grid-cols-3 gap-1.5 p-1 rounded-lg bg-background/50 border border-white/5 h-12">
+                <div className="space-y-3">
+                  <Label className="text-sm font-bold text-foreground/90">Priority</Label>
+                  <div className="grid grid-cols-3 gap-2 p-1.5 rounded-lg bg-gradient-to-br from-background/80 to-background/40 border border-white/10">
                     {(["low", "medium", "high"] as const).map((level) => (
                       <button
                         key={level}
                         type="button"
                         onClick={() => setProverTip(level)}
                         disabled={loading || progress === "done"}
-                        className={`text-[10px] font-bold uppercase tracking-wider rounded-md transition-all ${proverTip === level
-                          ? "bg-primary text-white shadow-lg shadow-primary/20 scale-[1.05] z-10"
-                          : "text-muted-foreground hover:bg-white/5"
+                        className={`h-11 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${proverTip === level
+                          ? "bg-gradient-to-r from-primary to-primary/80 text-black shadow-lg shadow-primary/30 scale-[1.02]"
+                          : "text-muted-foreground hover:bg-white/10 hover:text-foreground"
                           }`}
                       >
                         {level}
@@ -224,103 +225,116 @@ export default function SendPage() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="memo" className="text-sm font-semibold px-1">Memo <span className="text-[10px] text-muted-foreground font-normal">(Optional, Private)</span></Label>
-                <Input
-                  id="memo"
-                  value={memo}
-                  onChange={(e) => setMemo(e.target.value)}
-                  placeholder="Secret message to recipient"
-                  className="h-12 bg-white/5 border-none ring-1 ring-white/10"
-                  disabled={loading || progress === "done"}
-                />
+              <div className="space-y-3">
+                <Label htmlFor="memo" className="text-sm font-bold text-foreground/90">
+                  Memo <span className="text-xs text-muted-foreground/60 font-normal">(Optional, Encrypted)</span>
+                </Label>
+                <div className="relative group">
+                  <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 via-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 rounded-lg transition-opacity pointer-events-none" />
+                  <Input
+                    id="memo"
+                    value={memo}
+                    onChange={(e) => setMemo(e.target.value)}
+                    placeholder="Private message to recipient"
+                    className="h-14 bg-white/5 border border-white/10 ring-0 focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:border-purple-500/50 transition-all"
+                    disabled={loading || progress === "done"}
+                  />
+                </div>
               </div>
             </div>
 
-            <div className="pt-2">
+            <div className="pt-4">
               <Button
-                className="w-full h-14 text-lg font-bold shadow-2xl shadow-primary/20 transition-all hover:scale-[1.01] active:scale-[0.99] group overflow-hidden"
+                className="w-full h-16 text-lg font-bold bg-gradient-to-r from-primary via-primary/90 to-primary shadow-2xl shadow-primary/30 hover:shadow-primary/40 transition-all hover:scale-[1.02] active:scale-[0.98] group relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={!canSubmit || loading || progress === "done"}
                 onClick={() => setConfirmOpen(true)}
               >
-                <span className="relative z-10 flex items-center gap-2">
+                <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+                <span className="relative z-10 flex items-center gap-3">
+                  <SendIcon className="w-5 h-5" />
                   Review Transaction
                   <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </span>
-                <div className="absolute inset-x-0 bottom-0 h-1 bg-white/20 transform translate-y-full group-hover:translate-y-0 transition-transform" />
               </Button>
             </div>
           </CardContent>
         </Card>
 
         <div className="lg:col-span-2 space-y-6">
-          <Card className="border-none bg-primary/5 shadow-lg ring-1 ring-primary/20">
-            <CardHeader className="pb-3 border-b border-primary/10">
+          <Card className="border border-primary/20 bg-gradient-to-br from-primary/10 via-primary/5 to-transparent backdrop-blur-lg shadow-xl">
+            <CardHeader className="pb-4 border-b border-primary/20">
               <CardTitle className="text-sm flex items-center gap-2 text-primary font-bold uppercase tracking-widest">
-                <Info className="w-4 h-4" />
-                Security Check
+                <ShieldCheck className="w-5 h-5" />
+                Security Information
               </CardTitle>
             </CardHeader>
-            <CardContent className="pt-4 space-y-4">
-              <div className="flex gap-3">
+            <CardContent className="pt-5 space-y-5">
+              <div className="flex gap-3 p-3 rounded-lg bg-gradient-to-r from-primary/10 to-transparent border border-primary/10">
                 <ShieldCheck className="w-5 h-5 text-primary shrink-0 mt-0.5" />
-                <div className="text-xs leading-relaxed text-muted-foreground">
-                  Your **Spending Key** is stored in the OS Keychain and never leaves the backend process.
-                  The proof is generated locally on your machine.
+                <div className="text-xs leading-relaxed text-foreground/80 font-medium">
+                  Your <span className="font-bold text-primary">Spending Key</span> is securely stored in the OS Keychain and never leaves your device.
                 </div>
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-3 p-3 rounded-lg bg-gradient-to-r from-amber-500/10 to-transparent border border-amber-500/10">
                 <Zap className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-                <div className="text-xs leading-relaxed text-muted-foreground">
-                  **Prover Tips** help incentivize the secondary prover network to include your proof in the next batch faster.
+                <div className="text-xs leading-relaxed text-foreground/80 font-medium">
+                  <span className="font-bold text-amber-500">Prover Tips</span> incentivize the network to process your transaction faster.
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {progress !== "idle" && (
-            <Card className={`border-none shadow-xl ring-1 animate-in zoom-in-95 ${progress === "error" ? "ring-destructive/20 bg-destructive/5" : "ring-white/10 bg-background/50"
+            <Card className={`border backdrop-blur-xl shadow-2xl animate-in zoom-in-95 duration-300 ${progress === "error" ? "border-red-500/30 bg-gradient-to-br from-red-500/10 to-red-500/5" : "border-white/10 bg-gradient-to-br from-background/80 to-background/60"
               }`}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Process Activity</CardTitle>
+              <CardHeader className="pb-3 border-b border-white/10">
+                <CardTitle className="text-lg font-bold">Transaction Progress</CardTitle>
               </CardHeader>
-              <CardContent className="pt-2 space-y-4 text-sm font-medium">
+              <CardContent className="pt-4 space-y-4 text-sm font-medium">
                 <div className="space-y-3">
                   {[
-                    { key: "preparing", label: "Encryption & Witnessing", step: 1 },
-                    { key: "proving", label: "ZK-SNARK generation", step: 2 },
-                    { key: "broadcasting", label: "On-chain broadcasting", step: 3 },
+                    { key: "preparing", label: "Encryption & Witnessing", step: 1, icon: ShieldCheck },
+                    { key: "proving", label: "ZK-SNARK Generation", step: 2, icon: Zap },
+                    { key: "broadcasting", label: "On-chain Broadcasting", step: 3, icon: SendIcon },
                   ].map((s) => {
                     const isCompleted = ["proving", "broadcasting", "done"].includes(progress) && progress !== s.key;
                     const isActive = progress === s.key;
                     const isError = progress === "error" && isActive;
+                    const Icon = s.icon;
 
                     return (
-                      <div key={s.key} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
-                        <div className="flex items-center gap-2.5">
+                      <div key={s.key} className={`flex items-center justify-between p-4 rounded-xl border transition-all ${isCompleted ? "bg-emerald-500/10 border-emerald-500/20" : isActive ? (isError ? "bg-red-500/10 border-red-500/20" : "bg-primary/10 border-primary/20") : "bg-white/5 border-white/5"}`}>
+                        <div className="flex items-center gap-3">
                           {isCompleted ? (
-                            <div className="p-1 rounded-full bg-emerald-500/20">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                            <div className="p-2 rounded-full bg-emerald-500/20 border border-emerald-500/30">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                             </div>
                           ) : isActive ? (
                             isError ? (
-                              <div className="p-1 rounded-full bg-destructive/20">
-                                <XCircle className="w-3.5 h-3.5 text-destructive" />
+                              <div className="p-2 rounded-full bg-red-500/20 border border-red-500/30">
+                                <XCircle className="w-4 h-4 text-red-500" />
                               </div>
                             ) : (
-                              <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                              <div className="p-2 rounded-full bg-primary/20 border border-primary/30">
+                                <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                              </div>
                             )
                           ) : (
-                            <div className="w-4 h-4 rounded-full border border-white/10 bg-white/5 text-[8px] flex items-center justify-center text-muted-foreground">
-                              {s.step}
+                            <div className="p-2 rounded-full border border-white/10 bg-white/5">
+                              <Icon className="w-4 h-4 text-muted-foreground" />
                             </div>
                           )}
-                          <span className={`${isCompleted ? "text-emerald-500/80" : isActive ? "text-white" : "text-muted-foreground"} text-xs`}>
-                            {s.label}
-                          </span>
+                          <div className="flex flex-col">
+                            <span className={`text-sm font-semibold ${isCompleted ? "text-emerald-500" : isActive ? (isError ? "text-red-500" : "text-primary") : "text-muted-foreground"}`}>
+                              {s.label}
+                            </span>
+                            {isActive && !isError && (
+                              <span className="text-[10px] text-primary/70 animate-pulse uppercase tracking-wider mt-0.5">Processing...</span>
+                            )}
+                          </div>
                         </div>
-                        {isActive && !isError && (
-                          <span className="text-[10px] text-primary animate-pulse uppercase tracking-wider">Processing...</span>
+                        {isCompleted && (
+                          <div className="text-xs text-emerald-500/70 font-medium">✓ Done</div>
                         )}
                       </div>
                     );
@@ -329,21 +343,21 @@ export default function SendPage() {
 
                 {progress === "done" && (
                   <div className="pt-2 space-y-4 animate-in slide-in-from-top-2">
-                    <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 space-y-3 text-emerald-500">
-                      <div className="flex items-center gap-2 text-sm font-bold">
-                        <CheckCircle2 className="w-4 h-4" />
-                        Transaction Broadcasted
+                    <div className="p-5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-emerald-500/10 border border-emerald-500/30 space-y-3">
+                      <div className="flex items-center gap-2 text-sm font-bold text-emerald-500">
+                        <CheckCircle2 className="w-5 h-5" />
+                        Transaction Broadcasted Successfully
                       </div>
-                      <div className="space-y-1">
-                        <div className="text-[10px] uppercase font-bold opacity-70">Transaction ID</div>
-                        <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-emerald-500/20 font-mono text-[10px] break-all group select-all">
-                          {txId}
-                          <CopyButton value={txId || ""} label="" className="h-6 w-6 shrink-0 bg-transparent hover:bg-white/10 border-none text-emerald-500" />
+                      <div className="space-y-2">
+                        <div className="text-[10px] uppercase font-bold text-emerald-500/70 tracking-wider">Transaction ID</div>
+                        <div className="flex items-center justify-between gap-2 p-3 rounded-lg bg-emerald-500/20 border border-emerald-500/20 font-mono text-xs break-all group">
+                          <span className="text-emerald-500 font-medium">{txId}</span>
+                          <CopyButton value={txId || ""} label="" className="h-7 w-7 shrink-0 bg-transparent hover:bg-emerald-500/20 border-none text-emerald-500" />
                         </div>
                       </div>
                     </div>
-                    <Button variant="outline" className="w-full border-none ring-1 ring-white/10" onClick={resetForm}>
-                      Send Another
+                    <Button variant="outline" className="w-full h-12 border border-white/10 hover:bg-white/5 font-semibold" onClick={resetForm}>
+                      Send Another Transaction
                     </Button>
                   </div>
                 )}
@@ -354,73 +368,72 @@ export default function SendPage() {
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent className="max-w-md border-none bg-background/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/10 p-0 overflow-hidden">
-          <DialogHeader className="p-6 bg-white/5">
+        <DialogContent className="max-w-lg border border-white/10 bg-[hsl(var(--background)/0.98)] backdrop-blur-2xl shadow-2xl p-0 overflow-hidden">
+          <DialogHeader className="p-6 pb-5 bg-gradient-to-r from-primary/15 via-primary/10 to-transparent border-b border-white/10">
             <DialogTitle className="text-2xl font-bold flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary/20 text-primary">
-                <ArrowRight className="w-5 h-5" />
+              <div className="p-2.5 rounded-xl bg-gradient-to-br from-primary/30 to-primary/20 border border-primary/30">
+                <SendIcon className="w-6 h-6 text-primary" />
               </div>
-              Confirm Transfer
+              Confirm Transaction
             </DialogTitle>
-            <DialogDescription className="text-sm font-medium">
-              Carefully review the recipient and amount. Transactions are final.
+            <DialogDescription className="text-sm font-medium text-muted-foreground/80 mt-2">
+              Please carefully review all transaction details. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="p-6 space-y-6">
+          <div className="p-6 space-y-5">
             <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-3 shadow-inner">
-                <div className="space-y-1 flex justify-between items-start">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground opacity-60">Recipient</div>
-                  <Badge variant="outline" className="text-[8px] uppercase tracking-tighter border-primary/30 text-primary">Verified L1</Badge>
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-white/10 to-white/5 border border-white/10 space-y-3 shadow-lg">
+                <div className="flex justify-between items-start">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Recipient</div>
+                  <Badge variant="outline" className="text-[8px] uppercase tracking-wider border-emerald-500/40 text-emerald-500 bg-emerald-500/10">Verified</Badge>
                 </div>
-                <div className="break-all font-mono text-xs leading-relaxed group relative p-2 rounded-lg hover:bg-white/5 transition-colors cursor-default">
+                <div className="break-all font-mono text-sm leading-relaxed p-3 rounded-lg bg-background/50 border border-white/5">
                   {to}
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground opacity-60">Amount</div>
-                  <div className="text-xl font-black">{amount} <span className="text-xs text-muted-foreground font-normal">PRAF</span></div>
+                <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border border-emerald-500/20 space-y-2 shadow-lg">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-500/70">Amount</div>
+                  <div className="text-2xl font-black text-emerald-500">{amount} <span className="text-sm text-emerald-500/60 font-normal">PRAF</span></div>
                 </div>
-                <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground opacity-60">Priority</div>
-                  <div className="flex items-center gap-1.5 font-bold text-sm capitalize">
-                    {proverTip === "high" ? <Zap className="w-4 h-4 text-amber-500" /> : <Clock className="w-4 h-4 text-blue-500" />}
+                <div className="p-5 rounded-2xl bg-gradient-to-br from-primary/10 to-primary/5 border border-primary/20 space-y-2 shadow-lg">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70">Priority</div>
+                  <div className="flex items-center gap-2 font-bold text-base capitalize text-primary">
+                    {proverTip === "high" ? <Zap className="w-5 h-5 text-amber-500" /> : <Clock className="w-5 h-5 text-blue-500" />}
                     {proverTip}
                   </div>
                 </div>
               </div>
 
               {memo && (
-                <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground opacity-60">Private Memo</div>
-                  <div className="text-sm italic opacity-80">"{memo}"</div>
+                <div className="p-5 rounded-2xl bg-gradient-to-br from-purple-500/10 to-purple-500/5 border border-purple-500/20 space-y-2 shadow-lg">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-purple-500/70">Encrypted Memo</div>
+                  <div className="text-sm italic text-purple-400">"{memo}"</div>
                 </div>
               )}
             </div>
 
-            <div className="p-4 rounded-xl border border-dashed border-amber-500/30 bg-amber-500/5 flex gap-3 italic">
+            <div className="p-4 rounded-xl border border-dashed border-amber-500/30 bg-gradient-to-r from-amber-500/10 to-amber-500/5 flex gap-3">
               <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-              <div className="text-[10px] leading-relaxed text-amber-500/80 font-medium">
-                This will generate a zero-knowledge proof using your spending key.
-                The key remains securely encrypted on your device.
+              <div className="text-xs leading-relaxed text-amber-500/90 font-medium">
+                This transaction will generate a zero-knowledge proof using your spending key. The key remains securely encrypted on your device.
               </div>
             </div>
           </div>
 
-          <DialogFooter className="p-6 pt-0 flex gap-3 sm:gap-0">
+          <DialogFooter className="p-6 pt-0 flex gap-3 sm:gap-3">
             <Button
               variant="ghost"
-              className="flex-1 h-12 hover:bg-white/5"
+              className="flex-1 h-12 hover:bg-white/10 font-semibold border border-white/10"
               onClick={() => setConfirmOpen(false)}
               disabled={loading}
             >
-              Go Back
+              Cancel
             </Button>
             <Button
-              className="flex-1 h-12 shadow-xl shadow-primary/20 font-bold"
+              className="flex-1 h-12 bg-gradient-to-r from-primary via-primary/90 to-primary shadow-xl shadow-primary/30 font-bold hover:shadow-primary/40 transition-all"
               onClick={() => {
                 setConfirmOpen(false);
                 setProgress("idle");
@@ -433,7 +446,17 @@ export default function SendPage() {
               }}
               disabled={loading}
             >
-              {loading ? "Initializing..." : "Authorize & Send"}
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Processing...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4" />
+                  Authorize & Send
+                </span>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
