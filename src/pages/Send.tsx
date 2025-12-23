@@ -297,7 +297,20 @@ export default function SendPage() {
                     { key: "proving", label: "ZK-SNARK Generation", step: 2, icon: Zap },
                     { key: "broadcasting", label: "On-chain Broadcasting", step: 3, icon: SendIcon },
                   ].map((s) => {
-                    const isCompleted = ["proving", "broadcasting", "done"].includes(progress) && progress !== s.key;
+                    // Define step order for proper comparison
+                    const stepOrder: Record<string, number> = {
+                      idle: 0,
+                      preparing: 1,
+                      proving: 2,
+                      broadcasting: 3,
+                      done: 4,
+                      error: -1
+                    };
+
+                    const currentStepOrder = stepOrder[progress] || 0;
+                    const thisStepOrder = stepOrder[s.key] || 0;
+
+                    const isCompleted = currentStepOrder > thisStepOrder && progress !== "error";
                     const isActive = progress === s.key;
                     const isError = progress === "error" && isActive;
                     const Icon = s.icon;
