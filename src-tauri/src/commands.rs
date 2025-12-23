@@ -284,6 +284,7 @@ pub async fn rescan(
 #[serde(tag = "type")]
 enum HelperRequest {
     GetMemosByFingerprint { fingerprint: String },
+    GetOutgoingMemosBySenderFingerprint { sender_fingerprint: String },
     GetNullifierStatus { nullifier: String },
     GetStateRoots,
     GetNextCommitmentIndex,
@@ -296,6 +297,9 @@ enum HelperRequest {
 enum HelperResponse {
     GetMemosByFingerprintResult {
         notes: Vec<EncryptedNoteResponse>,
+    },
+    GetOutgoingMemosBySenderFingerprintResult {
+        notes: Vec<OutgoingNoteResponse>,
     },
     GetNullifierStatusResult {
         exists: bool,
@@ -327,6 +331,13 @@ struct EncryptedNoteResponse {
     pub commitment_index: u64,
     pub encrypted_memo: Option<String>,
     pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OutgoingNoteResponse {
+    pub commitment: String,
+    pub commitment_index: u64,
+    pub outgoing_ciphertext: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,8 +613,66 @@ async fn scan_notes_impl(
     if params.full_rescan {
         // v0 behavior kept for compatibility: confirm any locally pending outgoing txs.
         let _ = db::confirm_pending(db);
-        // Reconstruct outgoing transactions from spent notes that were cleared during rescan.
-        let _ = db::reconstruct_outgoing_transactions(db, &fingerprint_hex, active_account_index);
+
+        // OVK-based outgoing transaction recovery
+        // Fetch outgoing memos by sender fingerprint and decrypt with OVK
+        let ovk_key = *fvk.outgoing().as_bytes();
+        let req = HelperRequest::GetOutgoingMemosBySenderFingerprint {
+            sender_fingerprint: fingerprint_hex.clone(),
+        };
+        if let Ok(resp) = client.post(&url).json(&req).send().await {
+            if let Ok(resp) = resp.json::<HelperResponse>().await {
+                if let HelperResponse::GetOutgoingMemosBySenderFingerprintResult { notes } = resp {
+                    eprintln!("OVK recovery: found {} outgoing notes", notes.len());
+                    for note in notes {
+                        if let Some(ciphertext_hex) = note.outgoing_ciphertext {
+                            let enc_bytes =
+                                match hex::decode(ciphertext_hex.trim_start_matches("0x")) {
+                                    Ok(b) => b,
+                                    Err(_) => continue,
+                                };
+                            // Decrypt using OVK (same as memo_key encryption)
+                            if let Ok(plaintext) = decrypt_memo_v1(&enc_bytes, &ovk_key) {
+                                // Parse outgoing plaintext: recipient_fp (32) + amount (16) + memo
+                                if plaintext.len() >= 48 {
+                                    let mut recipient_fp = [0u8; 32];
+                                    recipient_fp.copy_from_slice(&plaintext[0..32]);
+                                    let mut amount_bytes = [0u8; 16];
+                                    amount_bytes.copy_from_slice(&plaintext[32..48]);
+                                    let amount = u128::from_le_bytes(amount_bytes);
+                                    let memo_bytes = &plaintext[48..];
+                                    let memo_text = String::from_utf8_lossy(memo_bytes).to_string();
+
+                                    // Create synthetic outgoing transaction
+                                    let tx_id = format!("ovk_recovered_{}", note.commitment_index);
+                                    let memo_opt = if memo_text.is_empty() {
+                                        None
+                                    } else {
+                                        Some(memo_text)
+                                    };
+
+                                    // Use insert_outgoing (will fail silently if duplicate)
+                                    let _ = db::insert_outgoing(
+                                        db,
+                                        tx_id.clone(),
+                                        active_account_index,
+                                        amount.to_string(),
+                                        "0".to_string(),
+                                        memo_opt,
+                                        "confirmed",
+                                        None,
+                                    );
+                                    eprintln!(
+                                        "OVK recovered outgoing tx: {} amount={}",
+                                        tx_id, amount
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(done)
