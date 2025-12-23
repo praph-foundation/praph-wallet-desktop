@@ -62,10 +62,17 @@ pub fn list_transactions_for_account(
                 _ => TxStatus::Failed,
             };
 
+            let amount_str: String = r.get(2)?;
+            let amount = if direction == TxDirection::Outgoing && !amount_str.starts_with('-') {
+                format!("-{}", amount_str)
+            } else {
+                amount_str
+            };
+
             Ok(TxSummary {
                 id: r.get(0)?,
                 direction,
-                amount: r.get(2)?,
+                amount,
                 fee: r.get(3)?,
                 memo: r.get(4)?,
                 timestamp: r.get::<_, i64>(5)? as u64,
@@ -333,10 +340,17 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
                 _ => TxStatus::Failed,
             };
 
+            let amount_str: String = r.get(2)?;
+            let amount = if direction == TxDirection::Outgoing && !amount_str.starts_with('-') {
+                format!("-{}", amount_str)
+            } else {
+                amount_str
+            };
+
             Ok(TxSummary {
                 id: r.get(0)?,
                 direction,
-                amount: r.get(2)?,
+                amount,
                 fee: r.get(3)?,
                 memo: r.get(4)?,
                 timestamp: r.get::<_, i64>(5)? as u64,
@@ -724,7 +738,7 @@ fn parse_amount_minor(amount: &str) -> i64 {
     sign * (whole_value * 10_000 + frac_value)
 }
 
-fn format_amount_minor(amount_minor: i64) -> String {
+pub fn format_amount_minor(amount_minor: i64) -> String {
     let sign = if amount_minor < 0 { "-" } else { "" };
     let v = amount_minor.abs();
     let whole = v / 10_000;

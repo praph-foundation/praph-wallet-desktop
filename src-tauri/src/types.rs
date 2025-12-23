@@ -17,7 +17,7 @@ pub struct Balance {
     pub unspent: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TxDirection {
     Incoming,

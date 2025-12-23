@@ -651,12 +651,19 @@ async fn scan_notes_impl(
                                         Some(memo_text)
                                     };
 
+                                    let amount_minor = if amount > i64::MAX as u128 {
+                                        i64::MAX
+                                    } else {
+                                        amount as i64
+                                    };
+                                    let amount_display = db::format_amount_minor(amount_minor);
+
                                     // Use insert_outgoing (will fail silently if duplicate)
                                     let _ = db::insert_outgoing(
                                         db,
                                         tx_id.clone(),
                                         active_account_index,
-                                        amount.to_string(),
+                                        amount_display,
                                         "0".to_string(),
                                         memo_opt,
                                         "confirmed",
