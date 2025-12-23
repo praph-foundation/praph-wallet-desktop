@@ -30,7 +30,10 @@ import {
   Server,
   Fingerprint,
   Loader2,
-  Palette
+  Palette,
+  Upload,
+  FileJson,
+  Download
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -168,6 +171,127 @@ export default function SettingsPage() {
                 >
                   {rescanRunning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                   Trigger Full Rescan
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-none bg-background/50 backdrop-blur-md shadow-xl ring-1 ring-white/5 overflow-hidden">
+            <CardHeader className="bg-white/5 border-b border-white/5">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Download className="w-5 h-5 text-primary" />
+                Account Metadata
+              </CardTitle>
+              <CardDescription>Export/import account names for cross-device sync.</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6 space-y-4">
+              <div className="p-4 rounded-xl bg-white/5 border border-white/5 space-y-4">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold">Export Account Names</h4>
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    Download a JSON file containing your account names. Import this on another device after wallet recovery.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full h-11 border-none ring-1 ring-white/10 hover:bg-primary/10 hover:text-primary transition-all font-bold"
+                  onClick={async () => {
+                    try {
+                      const accountsState = await api.getAccountsState();
+                      const metadata = {
+                        version: 1,
+                        exportedAt: new Date().toISOString(),
+                        accounts: accountsState.accounts.map(a => ({
+                          index: a.index,
+                          name: a.name,
+                        })),
+                      };
+
+                      const jsonContent = JSON.stringify(metadata, null, 2);
+
+                      // Use Tauri save dialog
+                      const { save } = await import('@tauri-apps/plugin-dialog');
+                      const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+
+                      const filePath = await save({
+                        defaultPath: `praph-accounts-${Date.now()}.json`,
+                        filters: [{
+                          name: 'JSON',
+                          extensions: ['json']
+                        }]
+                      });
+
+                      if (filePath) {
+                        await writeTextFile(filePath, jsonContent);
+                        toast.success(`Saved to ${filePath}`);
+                      }
+                    } catch (e) {
+                      console.error(e);
+                      toast.error("Failed to export account metadata");
+                    }
+                  }}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Export Account Names
+                </Button>
+              </div>
+
+              <div className="p-4 rounded-xl bg-white/5 border border-white/5 space-y-4">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold">Import Account Names</h4>
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    Restore account names from a previously exported JSON file.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full h-11 border-none ring-1 ring-white/10 hover:bg-primary/10 hover:text-primary transition-all font-bold"
+                  onClick={async () => {
+                    try {
+                      // Use Tauri open dialog
+                      const { open } = await import('@tauri-apps/plugin-dialog');
+                      const { readTextFile } = await import('@tauri-apps/plugin-fs');
+
+                      const filePath = await open({
+                        multiple: false,
+                        filters: [{
+                          name: 'JSON',
+                          extensions: ['json']
+                        }]
+                      });
+
+                      if (!filePath) return;
+
+                      const text = await readTextFile(filePath as string);
+                      const metadata = JSON.parse(text);
+
+                      if (!metadata.accounts || !Array.isArray(metadata.accounts)) {
+                        throw new Error("Invalid metadata format");
+                      }
+
+                      let importedCount = 0;
+                      for (const acc of metadata.accounts) {
+                        try {
+                          await api.renameAccount(acc.index, acc.name);
+                          importedCount++;
+                        } catch {
+                          // Account might not exist, skip
+                        }
+                      }
+
+                      // Refresh accounts state
+                      await api.getAccountsState();
+                      qc.invalidateQueries({ queryKey: ["accounts"] });
+
+                      toast.success(`Imported ${importedCount} account name(s)`);
+                    } catch (e) {
+                      console.error(e);
+                      toast.error(e instanceof Error ? e.message : "Failed to import metadata");
+                    }
+                  }}
+                >
+                  <Download className="w-4 h-4 mr-2 rotate-180" />
+                  Import Account Names
                 </Button>
               </div>
             </CardContent>

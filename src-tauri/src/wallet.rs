@@ -60,7 +60,11 @@ fn salt16_from_str(s: &str) -> [u8; 16] {
 }
 
 impl WalletState {
-    fn entry_for_service_and_username(&self, service: &str, username: &str) -> Result<Entry, String> {
+    fn entry_for_service_and_username(
+        &self,
+        service: &str,
+        username: &str,
+    ) -> Result<Entry, String> {
         Entry::new(service, username).map_err(|e| e.to_string())
     }
 
@@ -276,9 +280,7 @@ impl WalletState {
             match entry.get_password() {
                 Ok(_) => found.push((service.clone(), username.clone())),
                 Err(keyring::Error::NoEntry) => {}
-                Err(e) => errors.push(format!(
-                    "service={service} username={username} error={e}",
-                )),
+                Err(e) => errors.push(format!("service={service} username={username} error={e}",)),
             }
         }
         Ok((candidates, found, errors))
@@ -323,7 +325,7 @@ impl WalletState {
 
         Ok((
             WalletCreateResult {
-            mnemonic: mnemonic.to_string(),
+                mnemonic: mnemonic.to_string(),
             },
             enc,
         ))
@@ -382,10 +384,14 @@ impl WalletState {
         // If the entry was found under a legacy service name, migrate it to the primary.
         // If found under any legacy (service, username), migrate it to primary.
         if service != self.keyring_service {
-            let _ = self.entry_primary().and_then(|e| e.set_password(&enc).map_err(|e| e.to_string()));
+            let _ = self
+                .entry_primary()
+                .and_then(|e| e.set_password(&enc).map_err(|e| e.to_string()));
         } else {
             // Service matches; still ensure primary username is populated.
-            let _ = self.entry_primary().and_then(|e| e.set_password(&enc).map_err(|e| e.to_string()));
+            let _ = self
+                .entry_primary()
+                .and_then(|e| e.set_password(&enc).map_err(|e| e.to_string()));
         }
         let mut guard = self
             .unlocked_seed
@@ -421,23 +427,59 @@ impl WalletState {
     }
 
     fn derive_account_id(seed: &[u8], account_index: u32) -> Result<[u8; 32], String> {
-        use blake2::digest::Digest;
-        use blake2::Blake2b512;
+        use bip32::{ChildNumber, XPrv};
 
         if seed.len() < 32 {
             return Err("Seed too short".to_string());
         }
 
-        // Domain-separated derivation so indices produce independent account IDs.
-        // This is NOT Substrate's sr25519 derivation; it's a deterministic wallet-local scheme.
-        let mut hasher = Blake2b512::new();
-        hasher.update(b"praph_wallet_account_v1");
-        hasher.update(&seed[..32]);
-        hasher.update(account_index.to_le_bytes());
-        let out = hasher.finalize();
+        // BIP-44 derivation path: m/44'/9999'/account'/0/0
+        // 9999 is PRAPH's coin type (temporary, to be registered officially)
+        // Hardened derivation (') for purpose, coin_type, and account for security
 
+        // Derive extended private key from seed
+        let root_key =
+            XPrv::new(seed).map_err(|e| format!("Failed to create master key: {}", e))?;
+
+        // m/44' (purpose)
+        let purpose =
+            ChildNumber::new(44, true).map_err(|e| format!("Invalid purpose index: {}", e))?;
+        let purpose_key = root_key
+            .derive_child(purpose)
+            .map_err(|e| format!("Failed to derive purpose key: {}", e))?;
+
+        // m/44'/9999' (coin type)
+        let coin_type =
+            ChildNumber::new(9999, true).map_err(|e| format!("Invalid coin type index: {}", e))?;
+        let coin_key = purpose_key
+            .derive_child(coin_type)
+            .map_err(|e| format!("Failed to derive coin key: {}", e))?;
+
+        // m/44'/9999'/account' (account)
+        let account = ChildNumber::new(account_index, true)
+            .map_err(|e| format!("Invalid account index: {}", e))?;
+        let account_key = coin_key
+            .derive_child(account)
+            .map_err(|e| format!("Failed to derive account key: {}", e))?;
+
+        // m/44'/9999'/account'/0 (change)
+        let change =
+            ChildNumber::new(0, false).map_err(|e| format!("Invalid change index: {}", e))?;
+        let change_key = account_key
+            .derive_child(change)
+            .map_err(|e| format!("Failed to derive change key: {}", e))?;
+
+        // m/44'/9999'/account'/0/0 (address index)
+        let address_index =
+            ChildNumber::new(0, false).map_err(|e| format!("Invalid address index: {}", e))?;
+        let final_key = change_key
+            .derive_child(address_index)
+            .map_err(|e| format!("Failed to derive final key: {}", e))?;
+
+        // Extract the 32-byte private key
+        let private_key_bytes = final_key.private_key().to_bytes();
         let mut account_bytes = [0u8; 32];
-        account_bytes.copy_from_slice(&out[..32]);
+        account_bytes.copy_from_slice(&private_key_bytes);
         Ok(account_bytes)
     }
 
@@ -446,7 +488,9 @@ impl WalletState {
             .unlocked_seed
             .lock()
             .map_err(|_| "Wallet state lock poisoned".to_string())?;
-        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
+        let seed = guard
+            .as_ref()
+            .ok_or_else(|| "Wallet is locked".to_string())?;
         Self::derive_account_id(seed, account_index)
     }
 
@@ -463,7 +507,9 @@ impl WalletState {
             .unlocked_seed
             .lock()
             .map_err(|_| "Wallet state lock poisoned".to_string())?;
-        let seed = guard.as_ref().ok_or_else(|| "Wallet is locked".to_string())?;
+        let seed = guard
+            .as_ref()
+            .ok_or_else(|| "Wallet is locked".to_string())?;
 
         let account_bytes = Self::derive_account_id(seed, account_index)?;
 

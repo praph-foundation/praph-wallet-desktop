@@ -52,6 +52,18 @@ export default function OnboardingPage() {
       setLoading(true);
       setError(null);
       await api.walletImport(mnemonic.trim(), password);
+
+      // Discover previously used accounts
+      try {
+        const discovered = await api.discoverAccounts();
+        if (discovered.length > 0) {
+          toast.success(`Found ${discovered.length} account(s)`);
+        }
+      } catch (e) {
+        console.error("Account discovery failed:", e);
+        // Don't fail the import if discovery fails
+      }
+
       await finishOnboarding(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

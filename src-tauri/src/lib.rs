@@ -62,6 +62,8 @@ pub fn run() {
         })
         .manage(db_state)
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::wallet_status,
@@ -89,6 +91,8 @@ pub fn run() {
             commands::create_account,
             commands::create_account_named,
             commands::switch_account,
+            commands::rename_account,
+            commands::discover_accounts,
             commands::export_viewing_keys,
             commands::export_tvk,
             commands::get_settings,

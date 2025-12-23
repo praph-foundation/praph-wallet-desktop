@@ -1691,6 +1691,107 @@ pub fn switch_account(
 }
 
 #[tauri::command]
+pub fn rename_account(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    account_index: u32,
+    new_name: String,
+) -> Result<AccountsState, String> {
+    let count = db::get_account_count(&db)?;
+    if account_index >= count {
+        return Err("Account index out of range".to_string());
+    }
+    db::set_account_name_for_index(&db, account_index, new_name)?;
+    get_accounts_state(wallet, db)
+}
+
+#[tauri::command]
+pub async fn discover_accounts(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<Vec<AccountInfo>, String> {
+    // Start from index 0 and check if each account has any transaction history
+    // Stop when we find 20 consecutive unused accounts (BIP-44 gap limit)
+    const GAP_LIMIT: u32 = 20;
+    let mut discovered_accounts = Vec::new();
+    let mut gap_count = 0u32;
+    let mut index = 0u32;
+
+    let helper = db::get_helper_service_url(&db)?;
+    let helper_url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
+    let http = reqwest::Client::new();
+
+    while gap_count < GAP_LIMIT && index < 1000 {
+        // Derive the fingerprint for this account
+        let fingerprint = wallet.fingerprint_hex_for_index(index)?;
+
+        // Query helper service for any notes with this fingerprint
+        let req = HelperRequest::GetMemosByFingerprint {
+            fingerprint: fingerprint.clone(),
+        };
+
+        let resp = match http.post(&helper_url).json(&req).send().await {
+            Ok(r) => r,
+            Err(_) => {
+                // Network error, stop discovery
+                break;
+            }
+        };
+
+        let resp: HelperResponse = match resp.json().await {
+            Ok(r) => r,
+            Err(_) => break,
+        };
+
+        let has_transactions = match resp {
+            HelperResponse::GetMemosByFingerprintResult { notes } => !notes.is_empty(),
+            _ => false,
+        };
+
+        if has_transactions {
+            // Account is used, add it to discovered list
+            gap_count = 0;
+
+            // Get or create account name
+            let name = db::get_account_name_for_index(&db, index)?
+                .unwrap_or_else(|| format!("Account {}", index + 1));
+
+            // Ensure address is stored
+            let address = wallet.generate_address_for_index(index)?.address;
+            let _ = db::set_receive_address_for_index(&db, index, address.clone());
+            let _ = db::set_account_name_for_index(&db, index, name.clone());
+
+            discovered_accounts.push(AccountInfo {
+                index,
+                name,
+                address,
+                is_active: false,
+            });
+        } else {
+            gap_count += 1;
+        }
+
+        index += 1;
+    }
+
+    // Update account count to include all discovered accounts
+    if !discovered_accounts.is_empty() {
+        let max_index = discovered_accounts
+            .iter()
+            .map(|a| a.index)
+            .max()
+            .unwrap_or(0);
+        let new_count = max_index + 1;
+        let current_count = db::get_account_count(&db)?;
+        if new_count > current_count {
+            db::set_account_count(&db, new_count)?;
+        }
+    }
+
+    Ok(discovered_accounts)
+}
+
+#[tauri::command]
 pub fn export_viewing_keys(
     wallet: tauri::State<'_, WalletState>,
     password: String,

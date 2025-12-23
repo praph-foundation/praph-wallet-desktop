@@ -185,6 +185,8 @@ interface WalletApi {
   createAccount: () => Promise<AccountsState>;
   createAccountNamed: (name: string) => Promise<AccountsState>;
   switchAccount: (accountIndex: number) => Promise<AccountsState>;
+  renameAccount: (accountIndex: number, newName: string) => Promise<AccountsState>;
+  discoverAccounts: () => Promise<AccountInfo[]>;
   getSettings: () => Promise<Settings>;
   setHelperServiceUrl: (url: string) => Promise<void>;
   getSyncMetadata: () => Promise<SyncMetadata>;
@@ -230,6 +232,10 @@ const tauriApi: WalletApi = {
     invokeSafe<AccountsState>("create_account_named", { name }),
   switchAccount: (accountIndex: number) =>
     invokeSafe<AccountsState>("switch_account", { accountIndex }),
+  renameAccount: (accountIndex: number, newName: string) =>
+    invokeSafe<AccountsState>("rename_account", { accountIndex, newName }),
+  discoverAccounts: () =>
+    invokeSafe<AccountInfo[]>("discover_accounts"),
 
   getSettings: () => invokeSafe<Settings>("get_settings"),
   setHelperServiceUrl: (url: string) => invokeSafe<void>("set_helper_service_url", { url }),
@@ -380,6 +386,18 @@ const mockApi: WalletApi = {
     mockActiveAccountIndex = accountIndex;
     mockAccounts = mockAccounts.map((a) => ({ ...a, isActive: a.index === accountIndex }));
     return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
+  },
+  renameAccount: async (accountIndex: number, newName: string): Promise<AccountsState> => {
+    await sleep(50);
+    mockAccounts = mockAccounts.map((a) =>
+      a.index === accountIndex ? { ...a, name: newName } : a
+    );
+    return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
+  },
+  discoverAccounts: async (): Promise<AccountInfo[]> => {
+    await sleep(300);
+    // Mock returns empty array (no additional accounts discovered)
+    return [];
   },
 
   bridgeDeposit: async (_params: BridgeDepositParams): Promise<BridgeDepositResult> => {
