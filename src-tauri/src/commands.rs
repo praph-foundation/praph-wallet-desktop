@@ -958,11 +958,30 @@ pub async fn send_transaction(
     rng.fill_bytes(&mut memo_nonce);
     let encrypted_memo =
         encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
+
+    // OVK: Build outgoing metadata for sender-side recovery
+    // Contains: recipient fingerprint (32 bytes) + amount (16 bytes) + memo text
+    let mut outgoing_plaintext = Vec::with_capacity(48 + memo_text.len());
+    outgoing_plaintext.extend_from_slice(to_fvk.fingerprint()); // 32 bytes: recipient fingerprint
+    outgoing_plaintext.extend_from_slice(&amount_minor_u128.to_le_bytes()); // 16 bytes: amount
+    outgoing_plaintext.extend_from_slice(memo_text.as_bytes()); // variable: memo
+
+    // Encrypt with sender's OVK-derived key (using OVK as symmetric key like memo_key)
+    let mut outgoing_nonce = [0u8; 12];
+    rng.fill_bytes(&mut outgoing_nonce);
+    let outgoing_ciphertext = encrypt_memo_v1(
+        &outgoing_plaintext,
+        sender_fvk.outgoing().as_bytes(),
+        &outgoing_nonce,
+    )?;
+
     let mut output_memos_json = Vec::new();
     output_memos_json.push(serde_json::json!({
         "note_commitment": hex::encode(output_commitment_bytes),
         "fingerprint": hex::encode(to_fvk.fingerprint()),
         "memo": hex::encode(encrypted_memo),
+        "sender_fingerprint": hex::encode(sender_fvk.fingerprint()),
+        "outgoing_ciphertext": hex::encode(&outgoing_ciphertext),
     }));
 
     if let Some((change_note, change_commitment_bytes)) = &change_note_opt {
