@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, SendParams } from "../lib/tauri";
 import { toast } from "sonner";
 import { useWalletStore } from "../state/walletStore";
@@ -17,6 +17,13 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import {
   Send as SendIcon,
   ArrowRight,
@@ -48,6 +55,12 @@ export default function SendPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [progress, setProgress] = useState<ProgressStep>("idle");
   const [txId, setTxId] = useState<string | null>(null);
+
+  // Fetch accounts for Quick Select dropdown
+  const { data: accountsState } = useQuery({
+    queryKey: ["accounts"],
+    queryFn: () => api.getAccountsState(),
+  });
 
   const isValidAddress = useMemo(() => {
     // Simple check: L1 address or IVK (praph... or hex-like or length-based)
@@ -124,7 +137,33 @@ export default function SendPage() {
           <CardContent className="pt-8 space-y-6">
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="to" className="text-sm font-semibold px-1">Recipient Address</Label>
+                <div className="flex items-center justify-between px-1">
+                  <Label htmlFor="to" className="text-sm font-semibold">Recipient Address</Label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground font-medium">Quick Select:</span>
+                    <Select
+                      value=""
+                      onValueChange={(address) => setTo(address)}
+                      disabled={loading || progress === "done"}
+                    >
+                      <SelectTrigger className="w-[180px] h-8 text-xs bg-white/5 border-none ring-1 ring-white/10">
+                        <SelectValue placeholder="My Accounts" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {accountsState?.accounts.map((account) => (
+                          <SelectItem key={account.index} value={account.address}>
+                            <div className="flex flex-col items-start">
+                              <span className="font-medium">{account.name}</span>
+                              <span className="text-[10px] text-muted-foreground font-mono truncate max-w-[150px]">
+                                {account.address.slice(0, 10)}...{account.address.slice(-8)}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
                 <div className="relative group">
                   <div className="absolute left-3 top-1/2 -translate-y-1/2">
                     <Wallet className={`w-4 h-4 transition-colors ${to ? 'text-primary' : 'text-muted-foreground'}`} />
