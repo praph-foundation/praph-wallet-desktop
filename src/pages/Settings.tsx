@@ -238,7 +238,7 @@ export default function SettingsPage() {
       </div>
 
       <Dialog open={rescanOpen} onOpenChange={setRescanOpen}>
-        <DialogContent className="max-w-md border-none bg-background/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/10 p-0 overflow-hidden">
+        <DialogContent className="max-w-md border-none bg-white dark:bg-slate-950 shadow-2xl ring-1 ring-black/10 dark:ring-white/10 p-0 overflow-hidden">
           <DialogHeader className="p-6 bg-white/5">
             <DialogTitle className="text-2xl font-bold flex items-center gap-3 font-mono">
               <RefreshCw className={`w-5 h-5 ${rescanRunning ? 'animate-spin' : ''}`} />
@@ -293,7 +293,7 @@ export default function SettingsPage() {
           setViewingKeys(null);
         }
       }}>
-        <DialogContent className="max-w-md border-none bg-background/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/10 p-0 overflow-hidden">
+        <DialogContent className="max-w-md border-none bg-white dark:bg-slate-950 shadow-2xl ring-1 ring-black/10 dark:ring-white/10 p-0 overflow-hidden">
           <DialogHeader className="p-6 bg-white/5">
             <DialogTitle className="text-2xl font-bold flex items-center gap-3">
               <div className="p-2 rounded-lg bg-primary/20 text-primary">

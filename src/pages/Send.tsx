@@ -133,7 +133,7 @@ export default function SendPage() {
                     id="to"
                     value={to}
                     onChange={(e) => setTo(e.target.value)}
-                    placeholder="Enter PRAPH address or IVK"
+                    placeholder="Enter PRAF address or IVK"
                     className="pl-10 h-12 bg-white/5 border-none ring-1 ring-white/10 focus-visible:ring-primary transition-all"
                     disabled={loading || progress === "done"}
                   />

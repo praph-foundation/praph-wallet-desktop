@@ -203,7 +203,7 @@ export default function DashboardPage() {
                       </div>
                       <div className="min-w-0">
                         <div className="text-sm font-semibold truncate">
-                          {tx.direction === "incoming" ? "Received PRAP" : "Sent PRAP"}
+                          {tx.direction === "incoming" ? "Received PRAF" : "Sent PRAF"}
                         </div>
                         <div className="mt-0.5 text-xs text-muted-foreground flex items-center gap-1.5">
                           {new Date(tx.timestamp * 1000).toLocaleString(undefined, {
@@ -215,7 +215,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     <div className="text-right flex flex-col items-end gap-1.5">
-                      <div className={`text-sm font-bold ${tx.direction === "incoming" ? "text-emerald-500" : "text-white"}`}>
+                      <div className={`text-sm font-bold ${tx.direction === "incoming" ? "text-emerald-500" : "text-foreground"}`}>
                         {tx.direction === "incoming" ? "+" : ""}{tx.amount}
                       </div>
                       <Badge variant={statusBadgeVariant(tx.status)} className="h-5 px-1.5 flex gap-1 items-center border-none">
@@ -270,7 +270,7 @@ export default function DashboardPage() {
                 >
                   Request Test Funds
                 </Button>
-                <DialogContent className="max-w-md border-none bg-background/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/10">
+                <DialogContent className="max-w-md border-none bg-white dark:bg-slate-950 shadow-2xl ring-1 ring-black/10 dark:ring-white/10 p-0 overflow-hidden">
                   <DialogHeader>
                     <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
                       <Coins className="text-primary w-6 h-6" />
@@ -370,8 +370,8 @@ export default function DashboardPage() {
           }
         }}
       >
-        <DialogContent className="max-w-md border-none bg-background/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/10">
-          <DialogHeader className="pb-4 border-b border-white/5">
+        <DialogContent className="max-w-md border-none bg-white dark:bg-slate-950 shadow-2xl ring-1 ring-black/10 dark:ring-white/10 p-0 overflow-hidden">
+          <DialogHeader className="p-6 pb-4 border-b border-black/5 dark:border-white/5">
             <div className="flex items-center gap-4">
               <div className={`p-4 rounded-2xl ${selectedTx?.direction === "incoming" ? "bg-emerald-500/10" : "bg-primary/10"}`}>
                 {selectedTx?.direction === "incoming" ? (
@@ -395,15 +395,15 @@ export default function DashboardPage() {
           </DialogHeader>
 
           {selectedTx ? (
-            <div className="space-y-5 py-4">
+            <div className="space-y-5 p-6">
               <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 rounded-xl bg-white/5 space-y-1">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 space-y-1">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Amount</div>
-                  <div className={`text-xl font-bold ${selectedTx.direction === "incoming" ? "text-emerald-500" : "text-white"}`}>
-                    {selectedTx.amount}
+                  <div className={`text-xl font-bold ${selectedTx.direction === "incoming" ? "text-emerald-500" : "text-foreground"}`}>
+                    {selectedTx.direction === "incoming" ? "+" : ""}{selectedTx.amount}
                   </div>
                 </div>
-                <div className="p-3 rounded-xl bg-white/5 space-y-1">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 space-y-1">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Network Fee</div>
                   <div className="text-xl font-bold">{selectedTx.fee}</div>
                 </div>
@@ -411,14 +411,14 @@ export default function DashboardPage() {
 
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-[10px] uppercase font-bold px-1">Transaction ID</Label>
-                <div className="group relative flex items-center gap-3 p-3 rounded-xl bg-white/5 ring-1 ring-white/10">
+                <div className="group relative flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-white/5 ring-1 ring-slate-200 dark:ring-white/10">
                   <div className="flex-1 min-w-0 font-mono text-xs break-all leading-relaxed">
                     {selectedTx.id}
                   </div>
                   <CopyButton
                     value={selectedTx.id}
                     label=""
-                    className="shrink-0 h-8 w-8 rounded-lg bg-white/5 hover:bg-white/10"
+                    className="shrink-0 h-8 w-8 rounded-lg bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10"
                   />
                 </div>
               </div>
@@ -426,7 +426,7 @@ export default function DashboardPage() {
               {selectedTx.memo && (
                 <div className="space-y-2">
                   <Label className="text-muted-foreground text-[10px] uppercase font-bold px-1">Memo</Label>
-                  <div className="p-3 rounded-xl bg-white/5 italic text-sm border-l-2 border-primary/30">
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 italic text-sm border-l-2 border-primary/30">
                     "{selectedTx.memo}"
                   </div>
                 </div>
@@ -435,7 +435,7 @@ export default function DashboardPage() {
               <div className="flex gap-3 pt-2">
                 <Button
                   variant="outline"
-                  className="flex-1 border-none ring-1 ring-white/10 bg-white/5"
+                  className="flex-1 border-none ring-1 ring-slate-200 dark:ring-white/10 bg-slate-50 dark:bg-white/5"
                   onClick={() => setTvkOpen(true)}
                 >
                   <Shield className="w-4 h-4 mr-2 text-primary" />
@@ -443,7 +443,7 @@ export default function DashboardPage() {
                 </Button>
                 <Button
                   variant="outline"
-                  className="flex-1 border-none ring-1 ring-white/10 bg-white/5"
+                  className="flex-1 border-none ring-1 ring-slate-200 dark:ring-white/10 bg-slate-50 dark:bg-white/5"
                   disabled
                 >
                   <ExternalLink className="w-4 h-4 mr-2" />
@@ -469,7 +469,7 @@ export default function DashboardPage() {
               }
             }}
           >
-            <DialogContent className="max-w-sm border-none bg-background/98 backdrop-blur-2xl shadow-3xl ring-1 ring-white/20">
+            <DialogContent className="max-w-sm border-none bg-white dark:bg-slate-950 shadow-3xl ring-1 ring-black/10 dark:ring-white/20 p-0 overflow-hidden">
               <DialogHeader>
                 <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center mb-2">
                   <Key className="text-primary w-5 h-5" />
@@ -537,6 +537,6 @@ export default function DashboardPage() {
           </Dialog>
         </DialogContent>
       </Dialog>
-    </div>
+    </div >
   );
 }
