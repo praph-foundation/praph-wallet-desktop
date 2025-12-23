@@ -1,9 +1,9 @@
 use crate::db;
 use crate::db::DbState;
 use crate::types::{
-    AddressResult, AppInfo, Balance, BridgeDepositParams, BridgeDepositResult, ScanNotesParams,
-    MintDevFaucetParams, MintDevFaucetResult, SendParams, SendResult, Settings, SyncMetadata,
-    SyncState, TxSummary, WalletCreateResult, WalletStatus, AccountsState, AccountInfo,
+    AccountInfo, AccountsState, AddressResult, AppInfo, Balance, BridgeDepositParams,
+    BridgeDepositResult, MintDevFaucetParams, MintDevFaucetResult, ScanNotesParams, SendParams,
+    SendResult, Settings, SyncMetadata, SyncState, TxSummary, WalletCreateResult, WalletStatus,
 };
 use crate::wallet::WalletState;
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,10 @@ fn resolve_keys_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf
                 return Ok(p);
             }
         }
-        if let Ok(p) = app.path().resolve("resources/keys", BaseDirectory::Resource) {
+        if let Ok(p) = app
+            .path()
+            .resolve("resources/keys", BaseDirectory::Resource)
+        {
             if p.is_dir() {
                 return Ok(p);
             }
@@ -127,11 +130,21 @@ pub fn debug_wallet_seed_storage_status(
     out.insert("scanFound".to_string(), serde_json::Value::Bool(scan_found));
     out.insert(
         "services".to_string(),
-        serde_json::Value::Array(services.into_iter().map(serde_json::Value::String).collect()),
+        serde_json::Value::Array(
+            services
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
     );
     out.insert(
         "usernames".to_string(),
-        serde_json::Value::Array(usernames.into_iter().map(serde_json::Value::String).collect()),
+        serde_json::Value::Array(
+            usernames
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
     );
     out.insert(
         "errors".to_string(),
@@ -189,7 +202,9 @@ fn parse_ss58_account_id_32(s: &str, expected_prefix: u16) -> Result<[u8; 32], S
     }
     let prefix = data[0] as u16;
     if prefix != expected_prefix {
-        return Err(format!("SS58 prefix mismatch (expected {expected_prefix}, got {prefix})"));
+        return Err(format!(
+            "SS58 prefix mismatch (expected {expected_prefix}, got {prefix})"
+        ));
     }
 
     let checksum = &data[data.len() - 2..];
@@ -279,13 +294,19 @@ enum HelperRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum HelperResponse {
-    GetMemosByFingerprintResult { notes: Vec<EncryptedNoteResponse> },
-    GetNullifierStatusResult { exists: bool },
+    GetMemosByFingerprintResult {
+        notes: Vec<EncryptedNoteResponse>,
+    },
+    GetNullifierStatusResult {
+        exists: bool,
+    },
     StateRootsResult {
         commitment_root: String,
         nullifier_root: String,
     },
-    GetNextCommitmentIndexResult { commitment_index: u64 },
+    GetNextCommitmentIndexResult {
+        commitment_index: u64,
+    },
     GetCommitmentPathForIndexResult {
         commitment_path: ApiMerklePath,
         commitment_index: u64,
@@ -295,7 +316,9 @@ enum HelperResponse {
         spend_witnesses: Vec<ApiSpendWitness>,
         success: bool,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -500,7 +523,11 @@ async fn scan_notes_impl(
             spent,
         )?;
 
-        max_idx = Some(max_idx.map(|m| m.max(note.commitment_index)).unwrap_or(note.commitment_index));
+        max_idx = Some(
+            max_idx
+                .map(|m| m.max(note.commitment_index))
+                .unwrap_or(note.commitment_index),
+        );
     }
 
     // Check pending transactions and confirm if their nullifiers are on-chain
@@ -509,18 +536,13 @@ async fn scan_notes_impl(
         if nullifiers.is_empty() {
             continue;
         }
-        
+
         let mut all_confirmed = true;
         for nullifier_hex in nullifiers {
             let status_req = HelperRequest::GetNullifierStatus {
                 nullifier: nullifier_hex.clone(),
             };
-            let status_resp = match client
-                .post(&url)
-                .json(&status_req)
-                .send()
-                .await
-            {
+            let status_resp = match client.post(&url).json(&status_req).send().await {
                 Ok(resp) => resp,
                 Err(e) => {
                     eprintln!("Failed to check nullifier status for tx {}: {}", tx_id, e);
@@ -528,20 +550,26 @@ async fn scan_notes_impl(
                     break;
                 }
             };
-            
+
             let status_resp: HelperResponse = match status_resp.json().await {
                 Ok(resp) => resp,
                 Err(e) => {
-                    eprintln!("Failed to parse nullifier status response for tx {}: {}", tx_id, e);
+                    eprintln!(
+                        "Failed to parse nullifier status response for tx {}: {}",
+                        tx_id, e
+                    );
                     all_confirmed = false;
                     break;
                 }
             };
-            
+
             let exists = match status_resp {
                 HelperResponse::GetNullifierStatusResult { exists } => exists,
                 HelperResponse::Error { message } => {
-                    eprintln!("Helper service error checking nullifier for tx {}: {}", tx_id, message);
+                    eprintln!(
+                        "Helper service error checking nullifier for tx {}: {}",
+                        tx_id, message
+                    );
                     all_confirmed = false;
                     break;
                 }
@@ -550,13 +578,13 @@ async fn scan_notes_impl(
                     false
                 }
             };
-            
+
             if !exists {
                 all_confirmed = false;
                 break;
             }
         }
-        
+
         if all_confirmed {
             eprintln!("Confirming transaction: {}", tx_id);
             db::confirm_transaction_by_id(db, &tx_id)?;
@@ -601,12 +629,16 @@ pub async fn send_transaction(
     params: SendParams,
 ) -> Result<SendResult, String> {
     use praph_circuits::action::{BridgeAction, OutputAction, SpendAction};
+    use praph_circuits::halo2::enabled::{
+        create_client_action_proof, load_output_keys, load_spend_keys, ClientActionCircuit,
+    };
     use praph_circuits::hash::{fr_from_bytes, fr_to_bytes, poseidon_hash};
-    use praph_circuits::inputs::{ClientPrivateInputs, ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES};
+    use praph_circuits::inputs::{
+        ClientPrivateInputs, ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES,
+    };
     use praph_circuits::keys::SpendingKey;
     use praph_circuits::merkle::MerklePath;
     use praph_circuits::note::Note;
-    use praph_circuits::halo2::enabled::{create_client_action_proof, load_output_keys, load_spend_keys, ClientActionCircuit};
     use rand::RngCore;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
@@ -650,7 +682,11 @@ pub async fn send_transaction(
         return Err("insufficient balance".to_string());
     }
     let change_amount_minor: i64 = total_selected - amount_minor_i64;
-    let change_amount_u128: u128 = if change_amount_minor <= 0 { 0 } else { change_amount_minor as u128 };
+    let change_amount_u128: u128 = if change_amount_minor <= 0 {
+        0
+    } else {
+        change_amount_minor as u128
+    };
 
     let helper = db::get_helper_service_url(&db)?;
     let helper_url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
@@ -668,8 +704,10 @@ pub async fn send_transaction(
             commitment_root,
             nullifier_root,
         } => {
-            let c = hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-            let n = hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            let c =
+                hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            let n =
+                hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
             if c.len() != 32 || n.len() != 32 {
                 return Err("invalid state roots".to_string());
             }
@@ -731,7 +769,8 @@ pub async fn send_transaction(
     let mut spend_actions = Vec::with_capacity(selected.len());
     let mut spend_nullifiers = Vec::with_capacity(selected.len());
     for (n, w) in selected.iter().zip(witnesses.into_iter()) {
-        let nonce_raw = hex::decode(n.nonce_hex.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+        let nonce_raw =
+            hex::decode(n.nonce_hex.trim_start_matches("0x")).map_err(|e| e.to_string())?;
         if nonce_raw.len() != 32 {
             return Err("invalid note nonce".to_string());
         }
@@ -828,10 +867,18 @@ pub async fn send_transaction(
 
     let keys_dir = resolve_keys_dir(Some(&app))?;
     ensure_client_key_files(&keys_dir)?;
-    let (spend_params, spend_pk, _spend_vk) = load_spend_keys(&keys_dir)
-        .map_err(|e| format!("failed to load spend keys (keys_dir={}): {e:?}", keys_dir.display()))?;
-    let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir)
-        .map_err(|e| format!("failed to load output keys (keys_dir={}): {e:?}", keys_dir.display()))?;
+    let (spend_params, spend_pk, _spend_vk) = load_spend_keys(&keys_dir).map_err(|e| {
+        format!(
+            "failed to load spend keys (keys_dir={}): {e:?}",
+            keys_dir.display()
+        )
+    })?;
+    let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir).map_err(|e| {
+        format!(
+            "failed to load output keys (keys_dir={}): {e:?}",
+            keys_dir.display()
+        )
+    })?;
 
     let mut action_proofs_json: Vec<serde_json::Value> = Vec::new();
 
@@ -907,7 +954,8 @@ pub async fn send_transaction(
     let memo_plaintext = build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
     let mut memo_nonce = [0u8; 12];
     rng.fill_bytes(&mut memo_nonce);
-    let encrypted_memo = encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
+    let encrypted_memo =
+        encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
     let mut output_memos_json = Vec::new();
     output_memos_json.push(serde_json::json!({
         "note_commitment": hex::encode(output_commitment_bytes),
@@ -916,11 +964,15 @@ pub async fn send_transaction(
     }));
 
     if let Some((change_note, change_commitment_bytes)) = &change_note_opt {
-        let change_plaintext = build_v1_plaintext(&change_note.nonce, change_amount_u128, b"change");
+        let change_plaintext =
+            build_v1_plaintext(&change_note.nonce, change_amount_u128, b"change");
         let mut change_nonce = [0u8; 12];
         rng.fill_bytes(&mut change_nonce);
-        let encrypted_change =
-            encrypt_memo_v1(&change_plaintext, sender_fvk.memo_key().as_bytes(), &change_nonce)?;
+        let encrypted_change = encrypt_memo_v1(
+            &change_plaintext,
+            sender_fvk.memo_key().as_bytes(),
+            &change_nonce,
+        )?;
         output_memos_json.push(serde_json::json!({
             "note_commitment": hex::encode(change_commitment_bytes),
             "fingerprint": hex::encode(sender_fvk.fingerprint()),
@@ -935,7 +987,7 @@ pub async fn send_transaction(
     };
 
     let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:9091".to_string());
+        .unwrap_or_else(|_| "http://127.0.0.1:9093".to_string());
     let submit_request = serde_json::json!({
         "public_inputs": public_inputs_json,
         "action_proofs": serde_json::Value::Array(action_proofs_json),
@@ -951,13 +1003,16 @@ pub async fn send_transaction(
     if !submit_resp.status().is_success() {
         let status = submit_resp.status();
         let text = submit_resp.text().await.unwrap_or_default();
-        return Err(format!("prover rejected submission (status {status}): {text}"));
+        return Err(format!(
+            "prover rejected submission (status {status}): {text}"
+        ));
     }
 
-    let nullifier_hexs: Vec<String> = spend_nullifiers.iter()
+    let nullifier_hexs: Vec<String> = spend_nullifiers
+        .iter()
         .map(|n| hex::encode(fr_to_bytes(n)))
         .collect();
-    
+
     db::insert_outgoing(
         &db,
         tx_id.clone(),
@@ -968,7 +1023,10 @@ pub async fn send_transaction(
         "pending",
         Some(nullifier_hexs),
     )?;
-    let spent_commitments = selected.into_iter().map(|n| n.commitment).collect::<Vec<_>>();
+    let spent_commitments = selected
+        .into_iter()
+        .map(|n| n.commitment)
+        .collect::<Vec<_>>();
     db::mark_notes_spent(&db, &spent_commitments)?;
 
     Ok(SendResult { tx_id })
@@ -982,12 +1040,14 @@ pub async fn mint_dev_faucet(
     params: MintDevFaucetParams,
 ) -> Result<MintDevFaucetResult, String> {
     use praph_circuits::action::OutputAction;
+    use praph_circuits::halo2::enabled::{
+        create_client_action_proof, load_output_keys, ClientActionCircuit,
+    };
     use praph_circuits::hash::{fr_from_bytes, fr_to_bytes};
     use praph_circuits::inputs::{ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES};
     use praph_circuits::keys::SpendingKey;
     use praph_circuits::merkle::MerklePath;
     use praph_circuits::note::Note;
-    use praph_circuits::halo2::enabled::{create_client_action_proof, load_output_keys, ClientActionCircuit};
     use rand::RngCore;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
@@ -1026,8 +1086,10 @@ pub async fn mint_dev_faucet(
             commitment_root,
             nullifier_root,
         } => {
-            let c = hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-            let n = hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            let c =
+                hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+            let n =
+                hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
             if c.len() != 32 || n.len() != 32 {
                 return Err("invalid state roots".to_string());
             }
@@ -1069,7 +1131,8 @@ pub async fn mint_dev_faucet(
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    let next_index_resp: HelperResponse = next_index_resp.json().await.map_err(|e| e.to_string())?;
+    let next_index_resp: HelperResponse =
+        next_index_resp.json().await.map_err(|e| e.to_string())?;
     let next_index = match next_index_resp {
         HelperResponse::GetNextCommitmentIndexResult { commitment_index } => commitment_index,
         HelperResponse::Error { message } => return Err(message),
@@ -1086,7 +1149,9 @@ pub async fn mint_dev_faucet(
         .map_err(|e| e.to_string())?;
     let path_resp: HelperResponse = path_resp.json().await.map_err(|e| e.to_string())?;
     let api_path = match path_resp {
-        HelperResponse::GetCommitmentPathForIndexResult { commitment_path, .. } => commitment_path,
+        HelperResponse::GetCommitmentPathForIndexResult {
+            commitment_path, ..
+        } => commitment_path,
         HelperResponse::Error { message } => return Err(message),
         _ => return Err("unexpected helper response (GetCommitmentPathForIndex)".to_string()),
     };
@@ -1124,8 +1189,12 @@ pub async fn mint_dev_faucet(
 
     let keys_dir = resolve_keys_dir(Some(&app))?;
     ensure_client_key_files(&keys_dir)?;
-    let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir)
-        .map_err(|e| format!("failed to load output keys (keys_dir={}): {e:?}", keys_dir.display()))?;
+    let (output_params, output_pk, _output_vk) = load_output_keys(&keys_dir).map_err(|e| {
+        format!(
+            "failed to load output keys (keys_dir={}): {e:?}",
+            keys_dir.display()
+        )
+    })?;
 
     let circuit = ClientActionCircuit::from_output_action(
         commitment_root_fr,
@@ -1140,7 +1209,8 @@ pub async fn mint_dev_faucet(
     let memo_plaintext = build_v1_plaintext(&note_nonce, amount_minor_u128, memo_text.as_bytes());
     let mut memo_nonce = [0u8; 12];
     rng.fill_bytes(&mut memo_nonce);
-    let encrypted_memo = encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
+    let encrypted_memo =
+        encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
 
     let public_inputs_json = serde_json::json!({
         "commitment_root": hex::encode(fr_to_bytes(&public_inputs.commitment_root)),
@@ -1165,7 +1235,7 @@ pub async fn mint_dev_faucet(
     };
 
     let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:9091".to_string());
+        .unwrap_or_else(|_| "http://127.0.0.1:9093".to_string());
     let submit_request = serde_json::json!({
         "proof": hex::encode(&proof),
         "public_inputs": public_inputs_json,
@@ -1182,7 +1252,9 @@ pub async fn mint_dev_faucet(
     if !submit_resp.status().is_success() {
         let status = submit_resp.status();
         let text = submit_resp.text().await.unwrap_or_default();
-        return Err(format!("prover rejected submission (status {status}): {text}"));
+        return Err(format!(
+            "prover rejected submission (status {status}): {text}"
+        ));
     }
 
     // Wait for helper-service to index the minted commitment before scanning.
@@ -1208,7 +1280,9 @@ pub async fn mint_dev_faucet(
                             }
                         }
                         HelperResponse::Error { message } => {
-                            return Err(format!("helper-service error while waiting for mint indexing: {message}"));
+                            return Err(format!(
+                                "helper-service error while waiting for mint indexing: {message}"
+                            ));
                         }
                         _ => {}
                     }
@@ -1322,7 +1396,9 @@ pub fn wallet_unlock(
 }
 
 #[tauri::command]
-pub fn debug_probe_seed_entries(wallet: tauri::State<'_, WalletState>) -> Result<Vec<String>, String> {
+pub fn debug_probe_seed_entries(
+    wallet: tauri::State<'_, WalletState>,
+) -> Result<Vec<String>, String> {
     let found = wallet.probe_seed_entries()?;
     Ok(found
         .into_iter()
@@ -1345,7 +1421,10 @@ pub fn debug_probe_seed_entries_verbose(
     );
     out.insert(
         "found".to_string(),
-        found.into_iter().map(|(s, u)| format!("{s}::{u}")).collect(),
+        found
+            .into_iter()
+            .map(|(s, u)| format!("{s}::{u}"))
+            .collect(),
     );
     out.insert("errors".to_string(), errors);
     Ok(out)
