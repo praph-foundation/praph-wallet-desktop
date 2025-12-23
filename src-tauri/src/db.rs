@@ -160,8 +160,11 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
             }
         }
         if !has_account_index {
-            conn.execute("ALTER TABLE transactions ADD COLUMN account_index INTEGER NOT NULL DEFAULT 0", [])
-                .map_err(|e| e.to_string())?;
+            conn.execute(
+                "ALTER TABLE transactions ADD COLUMN account_index INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         // Ensure index exists (safe for both new and migrated DBs).
@@ -220,9 +223,12 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
 
 pub fn reset_wallet_data(db: &DbState) -> Result<(), String> {
     let conn = open_db(db)?;
-    conn.execute("DELETE FROM notes", []).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM transactions", []).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM settings", []).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM notes", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM transactions", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM settings", [])
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -234,7 +240,10 @@ pub fn set_encrypted_seed(db: &DbState, enc: String) -> Result<(), String> {
     set_setting(db, "encrypted_seed_v1", &enc)
 }
 
-pub fn get_account_name_for_index(db: &DbState, account_index: u32) -> Result<Option<String>, String> {
+pub fn get_account_name_for_index(
+    db: &DbState,
+    account_index: u32,
+) -> Result<Option<String>, String> {
     let key = account_name_key_for_index(account_index);
     get_setting(db, &key)
 }
@@ -271,7 +280,7 @@ pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Resul
 
     // Confirmed balance is unspent notes (already reflects confirmed transactions)
     let confirmed_balance = unspent_notes;
-    
+
     // Pending shows how much is being sent (negative for outgoing)
     let pending_balance = -outgoing_pending;
 
@@ -304,9 +313,7 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
 
     let conn = open_db(db)?;
     let mut stmt = conn
-        .prepare(
-            "SELECT id, direction, amount, fee, memo, timestamp, status FROM transactions",
-        )
+        .prepare("SELECT id, direction, amount, fee, memo, timestamp, status FROM transactions")
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
@@ -378,8 +385,11 @@ pub fn list_spendable_notes(db: &DbState) -> Result<Vec<SpendableNoteRow>, Strin
 
 pub fn clear_notes_for_fingerprint(db: &DbState, fingerprint: &str) -> Result<(), String> {
     let conn = open_db(db)?;
-    conn.execute("DELETE FROM notes WHERE fingerprint=?1", params![fingerprint])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM notes WHERE fingerprint=?1",
+        params![fingerprint],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -450,17 +460,22 @@ pub fn mark_notes_spent(db: &DbState, commitments: &[String]) -> Result<(), Stri
 
 pub fn confirm_pending(db: &DbState) -> Result<(), String> {
     let conn = open_db(db)?;
-    conn.execute("UPDATE transactions SET status='confirmed' WHERE status='pending'", [])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE transactions SET status='confirmed' WHERE status='pending'",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-pub fn get_pending_transactions_with_nullifiers(db: &DbState) -> Result<Vec<(String, Vec<String>)>, String> {
+pub fn get_pending_transactions_with_nullifiers(
+    db: &DbState,
+) -> Result<Vec<(String, Vec<String>)>, String> {
     let conn = open_db(db)?;
     let mut stmt = conn
         .prepare("SELECT id, nullifiers FROM transactions WHERE status='pending' AND nullifiers IS NOT NULL")
         .map_err(|e| e.to_string())?;
-    
+
     let rows = stmt
         .query_map([], |r| {
             let tx_id: String = r.get(0)?;
@@ -468,7 +483,7 @@ pub fn get_pending_transactions_with_nullifiers(db: &DbState) -> Result<Vec<(Str
             Ok((tx_id, nullifiers_json))
         })
         .map_err(|e| e.to_string())?;
-    
+
     let mut result = Vec::new();
     for row in rows {
         let (tx_id, nullifiers_json) = row.map_err(|e| e.to_string())?;
@@ -483,8 +498,86 @@ pub fn get_pending_transactions_with_nullifiers(db: &DbState) -> Result<Vec<(Str
 
 pub fn confirm_transaction_by_id(db: &DbState, tx_id: &str) -> Result<(), String> {
     let conn = open_db(db)?;
-    conn.execute("UPDATE transactions SET status='confirmed' WHERE id=?1", params![tx_id])
+    conn.execute(
+        "UPDATE transactions SET status='confirmed' WHERE id=?1",
+        params![tx_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Reconstruct outgoing transactions from spent notes after a full rescan.
+/// Since outgoing transaction details (recipient, memo) are not recoverable from chain,
+/// this creates synthetic transaction records based on spent note amounts minus change.
+pub fn reconstruct_outgoing_transactions(
+    db: &DbState,
+    fingerprint: &str,
+    account_index: u32,
+) -> Result<(), String> {
+    let conn = open_db(db)?;
+
+    // Get sum of all spent notes (excluding change notes which represent returned funds)
+    let spent_total: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM notes 
+             WHERE fingerprint=?1 AND spent=1 AND (memo IS NULL OR memo != 'change')",
+            params![fingerprint],
+            |r| r.get(0),
+        )
         .map_err(|e| e.to_string())?;
+
+    // Get sum of all change notes (these are returned funds from send transactions)
+    let change_total: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM notes 
+             WHERE fingerprint=?1 AND memo='change'",
+            params![fingerprint],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    // Net sent amount = spent inputs - change received back
+    let sent_amount = spent_total - change_total;
+
+    if sent_amount > 0 {
+        // Check if we already have outgoing transactions recorded
+        let existing_outgoing: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions 
+                 WHERE account_index=?1 AND direction='outgoing'",
+                params![account_index as i64],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        // Only create synthetic transaction if there's unaccounted outgoing amount
+        let unaccounted = sent_amount - existing_outgoing;
+        if unaccounted > 0 {
+            let tx_id = format!("recovered_{}", crate::unix_ts());
+            let amount_str = format_amount_minor(unaccounted);
+            let ts = crate::unix_ts() as i64;
+
+            conn.execute(
+                "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status, account_index, nullifiers)\
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    tx_id,
+                    "outgoing",
+                    amount_str,
+                    unaccounted,
+                    "0.0000 PRAF",
+                    0i64,
+                    Some("Recovered from rescan"),
+                    ts,
+                    "confirmed",
+                    account_index as i64,
+                    Option::<String>::None
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
     Ok(())
 }
 
@@ -667,7 +760,8 @@ fn set_setting(db: &DbState, key: &str, value: &str) -> Result<(), String> {
 }
 
 pub fn get_helper_service_url(db: &DbState) -> Result<String, String> {
-    Ok(get_setting(db, "helper_service_url")?.unwrap_or_else(|| "http://localhost:8081".to_string()))
+    Ok(get_setting(db, "helper_service_url")?
+        .unwrap_or_else(|| "http://localhost:8081".to_string()))
 }
 
 pub fn set_helper_service_url(db: &DbState, url: String) -> Result<(), String> {
@@ -752,17 +846,11 @@ pub fn get_sync_metadata(db: &DbState) -> Result<SyncMetadata, String> {
         Some("error") => SyncState::Error,
         _ => SyncState::Idle,
     };
-    let message = get_setting(db, "sync_message")?.and_then(|m| {
-        if m.is_empty() {
-            None
-        } else {
-            Some(m)
-        }
-    });
-    let last_synced_at = get_setting(db, "last_synced_at")?
-        .and_then(|v| v.parse::<u64>().ok());
-    let last_scanned_height = get_setting(db, "last_scanned_height")?
-        .and_then(|v| v.parse::<u64>().ok());
+    let message =
+        get_setting(db, "sync_message")?.and_then(|m| if m.is_empty() { None } else { Some(m) });
+    let last_synced_at = get_setting(db, "last_synced_at")?.and_then(|v| v.parse::<u64>().ok());
+    let last_scanned_height =
+        get_setting(db, "last_scanned_height")?.and_then(|v| v.parse::<u64>().ok());
 
     Ok(SyncMetadata {
         state,

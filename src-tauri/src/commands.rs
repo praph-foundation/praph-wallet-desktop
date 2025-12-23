@@ -602,6 +602,8 @@ async fn scan_notes_impl(
     if params.full_rescan {
         // v0 behavior kept for compatibility: confirm any locally pending outgoing txs.
         let _ = db::confirm_pending(db);
+        // Reconstruct outgoing transactions from spent notes that were cleared during rescan.
+        let _ = db::reconstruct_outgoing_transactions(db, &fingerprint_hex, active_account_index);
     }
 
     Ok(done)
