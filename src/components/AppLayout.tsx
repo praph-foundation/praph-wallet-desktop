@@ -5,7 +5,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import { useWalletStore } from "../state/walletStore";
-import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus, ChevronDown, Check } from "lucide-react";
+import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus, ChevronDown, Check, Pencil } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,99 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { toast } from "sonner";
+import type { AccountInfo, AccountsState } from "../lib/tauri";
+
+interface AccountItemProps {
+  account: AccountInfo;
+  isActive: boolean;
+  accountBusy: boolean;
+  setAccountBusy: (busy: boolean) => void;
+  setAccountsState: (accounts: AccountInfo[], activeIndex: number) => void;
+  setAccountPickerOpen: (open: boolean) => void;
+}
+
+function AccountItem({
+  account,
+  isActive,
+  accountBusy,
+  setAccountBusy,
+  setAccountsState,
+  setAccountPickerOpen,
+}: AccountItemProps) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(account.name);
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        className="flex flex-1 items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/40"
+        onClick={async () => {
+          if (accountBusy || isEditing) return;
+          try {
+            setAccountBusy(true);
+            const s = await api.switchAccount(account.index);
+            setAccountsState(s.accounts, s.activeAccountIndex);
+            toast.success("Switched account");
+            setAccountPickerOpen(false);
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Failed to switch account");
+          } finally {
+            setAccountBusy(false);
+          }
+        }}
+      >
+        <div className="text-left flex-1">
+          {isEditing ? (
+            <Input
+              value={editName}
+              onChange={(e) => setEditName(e.currentTarget.value)}
+              onKeyDown={async (e) => {
+                if (e.key === "Enter") {
+                  try {
+                    const s = await api.renameAccount(account.index, editName);
+                    setAccountsState(s.accounts, s.activeAccountIndex);
+                    toast.success("Account renamed");
+                    setIsEditing(false);
+                  } catch (e) {
+                    toast.error("Failed to rename account");
+                  }
+                } else if (e.key === "Escape") {
+                  setEditName(account.name);
+                  setIsEditing(false);
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="h-6 text-sm"
+              autoFocus
+            />
+          ) : (
+            <div className="font-medium">{account.name}</div>
+          )}
+          <div className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">
+            {account.address}
+          </div>
+        </div>
+        {isActive ? <Check className="h-4 w-4" /> : null}
+      </button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-9 w-9 p-0"
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsEditing(!isEditing);
+          if (!isEditing) {
+            setEditName(account.name);
+          }
+        }}
+        title="Rename account"
+      >
+        <Pencil className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
 
 export default function AppLayout() {
   const navigate = useNavigate();
@@ -86,33 +179,15 @@ export default function AppLayout() {
                   <div className="space-y-1">
                     {(accounts.length ? accounts : [{ index: 0, name: "Account 1", address: "", isActive: true }]).map(
                       (a) => (
-                        <button
+                        <AccountItem
                           key={a.index}
-                          type="button"
-                          className="flex w-full items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/40"
-                          onClick={async () => {
-                            if (accountBusy) return;
-                            try {
-                              setAccountBusy(true);
-                              const s = await api.switchAccount(a.index);
-                              setAccountsState(s.accounts, s.activeAccountIndex);
-                              toast.success("Switched account");
-                              setAccountPickerOpen(false);
-                            } catch (e) {
-                              toast.error(e instanceof Error ? e.message : "Failed to switch account");
-                            } finally {
-                              setAccountBusy(false);
-                            }
-                          }}
-                        >
-                          <div className="text-left">
-                            <div className="font-medium">{a.name}</div>
-                            <div className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">
-                              {a.address}
-                            </div>
-                          </div>
-                          {a.index === activeAccountIndex ? <Check className="h-4 w-4" /> : null}
-                        </button>
+                          account={a}
+                          isActive={a.index === activeAccountIndex}
+                          accountBusy={accountBusy}
+                          setAccountBusy={setAccountBusy}
+                          setAccountsState={setAccountsState}
+                          setAccountPickerOpen={setAccountPickerOpen}
+                        />
                       ),
                     )}
                   </div>
