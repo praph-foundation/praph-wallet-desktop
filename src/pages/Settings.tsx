@@ -4,6 +4,7 @@ import { api } from "../lib/tauri";
 import { useWalletStore } from "../state/walletStore";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import {
   Dialog,
@@ -12,12 +13,25 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import CopyButton from "../components/CopyButton";
+import {
+  Settings,
+  RefreshCw,
+  Key,
+  ShieldAlert,
+  Lock,
+  Info,
+  AlertTriangle,
+  Zap,
+  Server,
+  Fingerprint,
+  Loader2,
+  Palette
+} from "lucide-react";
 
 export default function SettingsPage() {
   const qc = useQueryClient();
@@ -34,9 +48,7 @@ export default function SettingsPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportPassword, setExportPassword] = useState("");
   const [exportRunning, setExportRunning] = useState(false);
-  const [viewingKeys, setViewingKeys] = useState<
-    { fvk: string; ivk: string; ovk: string } | null
-  >(null);
+  const [viewingKeys, setViewingKeys] = useState<{ fvk: string; ivk: string; ovk: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,221 +59,319 @@ export default function SettingsPage() {
         setHelperServiceUrl(s.helperServiceUrl);
         setUrl(s.helperServiceUrl);
       })
-      .catch(() => {
-      });
+      .catch(() => { });
     return () => {
       cancelled = true;
     };
   }, [setHelperServiceUrl]);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <div className="text-2xl font-semibold">Settings</div>
-        <div className="mt-1 text-sm text-muted-foreground">Security and connectivity.</div>
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex items-center gap-3">
+        <div className="p-3 rounded-2xl bg-primary/10 shadow-inner">
+          <Settings className="w-8 h-8 text-primary" />
+        </div>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Configure your vault security and network connectivity.
+          </p>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Helper Service</CardTitle>
-          <CardDescription>This URL will be used for rescans and note sync.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="space-y-2 md:col-span-2">
-              <Label>Helper service URL</Label>
-              <Input
-                value={url}
-                onChange={(e) => setUrl(e.currentTarget.value)}
-                placeholder="https://helper.yourdomain.tld"
-              />
-            </div>
-            <div className="flex items-end">
-              <Button
-                className="w-full"
-                onClick={async () => {
-                  try {
-                    await api.setHelperServiceUrl(url);
-                    setHelperServiceUrl(url);
-                    toast.success("Saved helper service URL");
-                  } catch {
-                    toast.error("Failed to save helper service URL");
-                  }
-                }}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="space-y-6">
+          <Card className="border-none bg-background/50 backdrop-blur-md shadow-xl ring-1 ring-white/5 overflow-hidden">
+            <CardHeader className="bg-white/5 border-b border-white/5">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Server className="w-5 h-5 text-primary" />
+                Connectivity
+              </CardTitle>
+              <CardDescription>Configure the helper service for blockchain sync.</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6 space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="helperUrl" className="text-sm font-semibold px-1">Helper Service URL</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="helperUrl"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="h-11 bg-white/5 border-none ring-1 ring-white/10 focus-visible:ring-primary font-mono text-xs"
+                  />
+                  <Button
+                    onClick={async () => {
+                      try {
+                        await api.setHelperServiceUrl(url);
+                        setHelperServiceUrl(url);
+                        toast.success("Network settings updated");
+                      } catch {
+                        toast.error("Failed to update helper URL");
+                      }
+                    }}
+                    className="h-11 px-6 font-bold"
+                  >
+                    Apply
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground italic px-1">
+                  The helper service provides the Merkle witnesses required for ZK transitions.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Theme</CardTitle>
-          <CardDescription>Choose between light and dark mode.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
-              <div className="text-sm font-medium">Dark mode</div>
-              <div className="text-xs text-muted-foreground">Applies immediately and is saved locally.</div>
-            </div>
-            <Switch
-              checked={theme === "dark"}
-              onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
-            />
-          </div>
-        </CardContent>
-      </Card>
+          <Card className="border-none bg-background/50 backdrop-blur-md shadow-xl ring-1 ring-white/5 overflow-hidden">
+            <CardHeader className="bg-white/5 border-b border-white/5">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Palette className="w-5 h-5 text-primary" />
+                Appearance
+              </CardTitle>
+              <CardDescription>Customize the visual interface.</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/5">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold">Dark Mode</div>
+                  <div className="text-[10px] text-muted-foreground">Enable high-contrast dark interface.</div>
+                </div>
+                <Switch
+                  checked={theme === "dark"}
+                  onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+                />
+              </div>
+            </CardContent>
+          </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Rescan</CardTitle>
-          <CardDescription>Use when your balance looks incorrect.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Dialog open={rescanOpen} onOpenChange={setRescanOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" disabled={rescanRunning}>
-                Trigger rescan
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Confirm rescan</DialogTitle>
-                <DialogDescription>
-                  This can take some time. It will rescan notes using the configured helper service.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setRescanOpen(false)} disabled={rescanRunning}>
-                  Cancel
-                </Button>
+          <Card className="border-none bg-background/50 backdrop-blur-md shadow-xl ring-1 ring-white/5 overflow-hidden">
+            <CardHeader className="bg-white/5 border-b border-white/5">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-primary" />
+                Blockchain Tools
+              </CardTitle>
+              <CardDescription>Maintenance and synchronization controls.</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6 space-y-4">
+              <div className="p-4 rounded-xl bg-white/5 border border-white/5 space-y-4">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold">Full Chain Rescan</h4>
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    If your balance doesn't match the PRAPH Explorer, a full rescan will rebuild your local note database from the Genesis block.
+                  </p>
+                </div>
                 <Button
-                  onClick={async () => {
-                    try {
-                      setSyncStatus("syncing", "Rescanning...");
-                      setRescanRunning(true);
-                      await api.scanNotes({ fullRescan: true });
-                      await qc.invalidateQueries({ queryKey: ["balance"] });
-                      await qc.invalidateQueries({ queryKey: ["transactions"] });
-                      toast.success("Rescan completed");
-                      setSyncStatus("idle", null);
-                      setRescanOpen(false);
-                    } catch {
-                      toast.error("Rescan failed");
-                      setSyncStatus("error", "Rescan failed");
-                    } finally {
-                      setRescanRunning(false);
-                    }
-                  }}
+                  variant="outline"
+                  className="w-full h-11 border-none ring-1 ring-white/10 hover:bg-primary/10 hover:text-primary transition-all font-bold"
+                  onClick={() => setRescanOpen(true)}
                   disabled={rescanRunning}
                 >
-                  {rescanRunning ? "Rescanning..." : "Confirm"}
+                  {rescanRunning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  Trigger Full Rescan
                 </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </CardContent>
-      </Card>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Key export</CardTitle>
-          <CardDescription>
-            Spending key must never be exposed to the frontend. Viewing keys can be shown after password confirmation.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Dialog
-            open={exportOpen}
-            onOpenChange={(open) => {
-              setExportOpen(open);
-              if (!open) {
-                setExportPassword("");
-                setViewingKeys(null);
-                setExportRunning(false);
-              }
-            }}
-          >
-            <DialogTrigger asChild>
-              <Button variant="outline">Export viewing keys</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Export viewing keys</DialogTitle>
-                <DialogDescription>Enter your wallet password to reveal viewing keys.</DialogDescription>
-              </DialogHeader>
+        <div className="space-y-6">
+          <Card className="border-none bg-primary/5 shadow-xl ring-1 ring-primary/20 overflow-hidden">
+            <CardHeader className="bg-primary/10 border-b border-primary/10">
+              <CardTitle className="text-lg flex items-center gap-2 text-primary">
+                <Fingerprint className="w-5 h-5" />
+                Key Export
+              </CardTitle>
+              <CardDescription className="text-primary/70">Secure disclosure of your viewing keys.</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6 space-y-6">
+              <div className="p-5 rounded-2xl bg-background/80 border border-primary/20 space-y-4">
+                <div className="flex gap-3">
+                  <ShieldAlert className="w-5 h-5 text-primary shrink-0" />
+                  <div className="space-y-1">
+                    <h5 className="text-sm font-bold">Security Advisory</h5>
+                    <p className="text-[10px] text-muted-foreground leading-relaxed">
+                      Viewing keys (FVK, IVK, OVK) allow anyone to **see** your transactions but NOT spend your funds.
+                      Never share your **Spending Key** (the mnemonic phrase).
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  className="w-full h-12 font-black shadow-lg shadow-primary/20"
+                  onClick={() => setExportOpen(true)}
+                >
+                  <Key className="w-4 h-4 mr-2" />
+                  Reveal Viewing Keys
+                </Button>
+              </div>
 
-              <div className="space-y-3">
+              <div className="space-y-3 opacity-60 grayscale scale-95 origin-top pointer-events-none">
+                <div className="h-10 w-full bg-white/5 rounded-lg border border-white/5" />
+                <div className="h-10 w-full bg-white/5 rounded-lg border border-white/5" />
+                <div className="h-10 w-full bg-white/5 rounded-lg border border-white/5" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-none bg-amber-500/5 shadow-xl ring-1 ring-amber-500/10">
+            <CardHeader className="pb-3 border-b border-amber-500/10">
+              <CardTitle className="text-sm flex items-center gap-2 text-amber-500 font-bold uppercase tracking-widest">
+                <Info className="w-4 h-4" />
+                About PRAPH Vault
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4 space-y-3">
+              <div className="flex justify-between text-[10px] font-medium">
+                <span className="text-muted-foreground">Version</span>
+                <span>0.1.0-alpha (PRAPH-Client 0.8.2)</span>
+              </div>
+              <div className="flex justify-between text-[10px] font-medium">
+                <span className="text-muted-foreground">Network</span>
+                <Badge variant="outline" className="text-[8px] h-4 bg-amber-500/10 text-amber-500 border-amber-500/20">TESTNET-4</Badge>
+              </div>
+              <div className="flex justify-between text-[10px] font-medium pt-2 border-t border-white/5">
+                <span className="text-muted-foreground">Backend Engine</span>
+                <span className="flex items-center gap-1">Rust / Halo2 <Zap className="w-3 h-3 text-primary fill-primary" /></span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <Dialog open={rescanOpen} onOpenChange={setRescanOpen}>
+        <DialogContent className="max-w-md border-none bg-background/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/10 p-0 overflow-hidden">
+          <DialogHeader className="p-6 bg-white/5">
+            <DialogTitle className="text-2xl font-bold flex items-center gap-3 font-mono">
+              <RefreshCw className={`w-5 h-5 ${rescanRunning ? 'animate-spin' : ''}`} />
+              Confirm Rescan
+            </DialogTitle>
+            <DialogDescription>
+              This process will rebuild your transaction history from the helper service.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-6">
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 mb-6 flex gap-3 italic">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+              <p className="text-xs text-amber-500 font-medium leading-relaxed">
+                Full rescanning may take 5-10 minutes depending on your network and the L1 height.
+                Do not close the application during this process.
+              </p>
+            </div>
+          </div>
+          <DialogFooter className="p-6 pt-0 flex gap-3 sm:gap-0">
+            <Button variant="ghost" className="flex-1 h-12" onClick={() => setRescanOpen(false)} disabled={rescanRunning}>Cancel</Button>
+            <Button
+              className="flex-1 h-12 shadow-xl shadow-primary/20 font-bold"
+              disabled={rescanRunning}
+              onClick={async () => {
+                try {
+                  setSyncStatus("syncing", "Full rescan initiated...");
+                  setRescanRunning(true);
+                  await api.scanNotes({ fullRescan: true });
+                  await qc.invalidateQueries({ queryKey: ["balance"] });
+                  await qc.invalidateQueries({ queryKey: ["transactions"] });
+                  toast.success("Local database synchronized");
+                  setSyncStatus("idle", null);
+                  setRescanOpen(false);
+                } catch {
+                  toast.error("Bridge signal synchronization failed");
+                  setSyncStatus("error", "Rescan failed");
+                } finally {
+                  setRescanRunning(false);
+                }
+              }}
+            >
+              {rescanRunning ? "Scanning Blocks..." : "Start Synchronizing"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={exportOpen} onOpenChange={(o) => {
+        setExportOpen(o);
+        if (!o) {
+          setExportPassword("");
+          setViewingKeys(null);
+        }
+      }}>
+        <DialogContent className="max-w-md border-none bg-background/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/10 p-0 overflow-hidden">
+          <DialogHeader className="p-6 bg-white/5">
+            <DialogTitle className="text-2xl font-bold flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-primary/20 text-primary">
+                <Lock className="w-5 h-5" />
+              </div>
+              Identity Disclosure
+            </DialogTitle>
+            <DialogDescription>Verify your password to export viewing keys.</DialogDescription>
+          </DialogHeader>
+
+          <div className="p-6 space-y-6">
+            {!viewingKeys ? (
+              <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Password</Label>
+                  <Label htmlFor="pass" className="text-xs font-bold uppercase text-muted-foreground mr-1">Master Password</Label>
                   <Input
+                    id="pass"
                     type="password"
                     value={exportPassword}
                     onChange={(e) => setExportPassword(e.currentTarget.value)}
-                    placeholder="Your password"
+                    placeholder="••••••••"
+                    className="h-12 bg-white/5 border-none ring-1 ring-white/10"
                   />
                 </div>
-
-                {viewingKeys ? (
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <div className="text-xs text-muted-foreground">FVK</div>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="break-all font-mono text-xs">{viewingKeys.fvk}</div>
-                        <CopyButton value={viewingKeys.fvk} label="Copy" successMessage="Copied FVK" />
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-xs text-muted-foreground">IVK</div>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="break-all font-mono text-xs">{viewingKeys.ivk}</div>
-                        <CopyButton value={viewingKeys.ivk} label="Copy" successMessage="Copied IVK" />
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-xs text-muted-foreground">OVK</div>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="break-all font-mono text-xs">{viewingKeys.ovk}</div>
-                        <CopyButton value={viewingKeys.ovk} label="Copy" successMessage="Copied OVK" />
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
               </div>
+            ) : (
+              <div className="space-y-4 animate-in zoom-in-95 duration-300">
+                <div className="space-y-4">
+                  {[
+                    { label: "Full Viewing Key (FVK)", value: viewingKeys.fvk, desc: "Used for scanning all notes." },
+                    { label: "Incoming Viewing Key (IVK)", value: viewingKeys.ivk, desc: "Only reveals inbound transactions." },
+                    { label: "Outgoing Viewing Key (OVK)", value: viewingKeys.ovk, desc: "Only reveals outbound transactions." },
+                  ].map((k) => (
+                    <div key={k.label} className="p-4 rounded-xl bg-white/5 border border-white/5 space-y-2 group">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-[10px] uppercase font-bold text-primary">{k.label}</Label>
+                        <CopyButton value={k.value} label="" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
+                      <div className="break-all font-mono text-[10px] leading-relaxed select-all">
+                        {k.value}
+                      </div>
+                      <p className="text-[8px] text-muted-foreground italic">{k.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
-              <DialogFooter>
+          <DialogFooter className="p-6 pt-0 flex gap-3 sm:gap-0">
+            {viewingKeys ? (
+              <Button className="w-full h-12 font-bold" onClick={() => setExportOpen(false)}>Done</Button>
+            ) : (
+              <>
+                <Button variant="ghost" className="flex-1 h-12" onClick={() => setExportOpen(false)}>Cancel</Button>
                 <Button
-                  variant="outline"
-                  onClick={() => setExportOpen(false)}
-                  disabled={exportRunning}
-                >
-                  Close
-                </Button>
-                <Button
+                  className="flex-1 h-12 font-bold"
+                  disabled={exportRunning || !exportPassword}
                   onClick={async () => {
                     try {
                       setExportRunning(true);
                       const res = await api.exportViewingKeys(exportPassword);
                       setViewingKeys(res);
-                      toast.success("Viewing keys exported");
+                      toast.success("Security keys decrypted");
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Failed to export viewing keys");
+                      toast.error("Incorrect password");
                     } finally {
                       setExportRunning(false);
                     }
                   }}
-                  disabled={exportRunning || exportPassword.trim().length === 0}
                 >
-                  {exportRunning ? "Exporting..." : "Export"}
+                  {exportRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verify Identity"}
                 </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </CardContent>
-      </Card>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
