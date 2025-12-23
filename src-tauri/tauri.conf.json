@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Praph Wallet",
-        "width": 800,
-        "height": 600
+        "width": 1200,
+        "height": 800
       }
     ],
     "security": {
@@ -31,6 +31,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/**/*"]
+    "resources": [
+      "resources/**/*"
+    ]
   }
 }
