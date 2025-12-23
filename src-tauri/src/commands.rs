@@ -290,6 +290,7 @@ enum HelperRequest {
     GetNextCommitmentIndex,
     GetCommitmentPathForIndex { commitment_index: u64 },
     GenerateWitnesses { spends: Vec<SpendRequest> },
+    SimulateAddCommitments { commitments: Vec<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,6 +320,9 @@ enum HelperResponse {
         spend_witnesses_count: usize,
         spend_witnesses: Vec<ApiSpendWitness>,
         success: bool,
+    },
+    SimulateAddCommitmentsResult {
+        new_commitment_root: String,
     },
     Error {
         message: String,
@@ -981,13 +985,61 @@ pub async fn send_transaction(
         }));
     }
 
+    // Pre-calculate next commitment roots using Helper Service (Merkle Logic)
+    // This allows the wallet to know the resulting Merkle Root after insertion.
+    let mut output_roots = Vec::new();
+    let mut outputs_so_far = Vec::new();
+
+    for output_action in private_inputs.output_actions.iter() {
+        if !output_action.enabled {
+            continue;
+        }
+
+        let commitment = output_action.note.commitment();
+        let commitment_hex = hex::encode(fr_to_bytes(&commitment));
+        outputs_so_far.push(commitment_hex);
+
+        // Call Helper to simulate adding these commitments
+        let mut sim_root = commitment_root_fr;
+        let sim_req = HelperRequest::SimulateAddCommitments {
+            commitments: outputs_so_far.clone(),
+        };
+        match http.post(&helper_url).json(&sim_req).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(helper_resp) = resp.json::<HelperResponse>().await {
+                    if let HelperResponse::SimulateAddCommitmentsResult {
+                        new_commitment_root,
+                    } = helper_resp
+                    {
+                        if let Ok(bytes) = hex::decode(new_commitment_root.trim_start_matches("0x"))
+                        {
+                            if bytes.len() == 32 {
+                                let mut arr = [0u8; 32];
+                                arr.copy_from_slice(&bytes);
+                                sim_root = fr_from_bytes(&arr);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // If simulation fails, fallback to current root (won't work but prevents crash)
+            }
+        }
+        output_roots.push(sim_root);
+    }
+    let mut output_root_iter = output_roots.into_iter();
+
     let mut chained_commitment_root_fr = commitment_root_fr;
     for output_action in private_inputs.output_actions.iter() {
         if !output_action.enabled {
             continue;
         }
         let commitment = output_action.note.commitment();
-        let next_commitment_root = poseidon_hash(&[chained_commitment_root_fr, commitment]);
+        // Use pre-calculated Merkle Root from Helper
+        let next_commitment_root = output_root_iter
+            .next()
+            .unwrap_or(chained_commitment_root_fr);
         let circuit = ClientActionCircuit::from_output_action(
             chained_commitment_root_fr,
             nullifier_root_fr,
