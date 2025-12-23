@@ -623,7 +623,6 @@ async fn scan_notes_impl(
         if let Ok(resp) = client.post(&url).json(&req).send().await {
             if let Ok(resp) = resp.json::<HelperResponse>().await {
                 if let HelperResponse::GetOutgoingMemosBySenderFingerprintResult { notes } = resp {
-                    eprintln!("OVK recovery: found {} outgoing notes", notes.len());
                     for note in notes {
                         if let Some(ciphertext_hex) = note.outgoing_ciphertext {
                             let enc_bytes =
@@ -668,10 +667,6 @@ async fn scan_notes_impl(
                                         memo_opt,
                                         "confirmed",
                                         None,
-                                    );
-                                    eprintln!(
-                                        "OVK recovered outgoing tx: {} amount={}",
-                                        tx_id, amount
                                     );
                                 }
                             }
