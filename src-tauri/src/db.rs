@@ -267,11 +267,20 @@ pub fn set_account_name_for_index(
 pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Result<Balance, String> {
     let conn = open_db(db)?;
 
-    // Use UTXO model: balance is simply unspent notes
+    // Unspent notes: actual spendable balance (UTXO model)
     let unspent_notes: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(amount_minor), 0) FROM notes WHERE spent=0 AND fingerprint=?1",
             params![fingerprint],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    // Pending incoming transactions (not yet reflected in notes)
+    let incoming_pending: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE account_index=?1 AND direction='incoming' AND status='pending'",
+            params![account_index as i64],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -285,17 +294,20 @@ pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Resul
         )
         .map_err(|e| e.to_string())?;
 
-    // Confirmed balance is unspent notes (already reflects confirmed transactions)
+    // Confirmed balance: settled balance (unspent notes only)
     let confirmed_balance = unspent_notes;
 
-    // Pending shows how much is being sent (negative for outgoing)
-    let pending_balance = -outgoing_pending;
+    // Total balance: confirmed + pending incoming - pending outgoing
+    let total_balance = confirmed_balance + incoming_pending - outgoing_pending;
+
+    // Pending shows net pending amount (incoming - outgoing)
+    let pending_balance = incoming_pending - outgoing_pending;
 
     Ok(Balance {
-        total: format_amount_minor(confirmed_balance),
+        total: format_amount_minor(total_balance),
         confirmed: format_amount_minor(confirmed_balance),
         pending: format_amount_minor(pending_balance),
-        unspent: format_amount_minor(confirmed_balance),
+        unspent: format_amount_minor(unspent_notes),
     })
 }
 
@@ -669,7 +681,7 @@ pub fn upsert_note(
            nonce=excluded.nonce,\
            received_at=excluded.received_at,\
            nullifier=excluded.nullifier,\
-           spent=excluded.spent",
+           spent=CASE WHEN excluded.spent=1 OR notes.spent=1 THEN 1 ELSE 0 END",
         params![
             commitment,
             commitment_index as i64,

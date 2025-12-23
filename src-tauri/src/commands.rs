@@ -1167,11 +1167,9 @@ pub async fn send_transaction(
         "pending",
         Some(nullifier_hexs),
     )?;
-    let spent_commitments = selected
-        .into_iter()
-        .map(|n| n.commitment)
-        .collect::<Vec<_>>();
-    db::mark_notes_spent(&db, &spent_commitments)?;
+
+    // Note: We don't mark notes as spent here. They will be marked as spent
+    // when the transaction is confirmed and scan_notes_impl detects the nullifiers on-chain.
 
     Ok(SendResult { tx_id })
 }
