@@ -270,61 +270,80 @@ export default function DashboardPage() {
                 >
                   Request Test Funds
                 </Button>
-                <DialogContent className="max-w-md border-none bg-white dark:bg-slate-950 shadow-2xl ring-1 ring-black/10 dark:ring-white/10 p-0 overflow-hidden">
-                  <DialogHeader>
-                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                      <Coins className="text-primary w-6 h-6" />
-                    </div>
-                    <DialogTitle className="text-2xl font-bold">Mint Funds</DialogTitle>
-                    <DialogDescription>
-                      This will request $PRAF tokens from the local dev testnet aggregator.
+                <DialogContent className="max-w-lg border border-white/10 bg-[hsl(var(--background)/0.98)] backdrop-blur-2xl shadow-2xl p-0 overflow-hidden">
+                  <DialogHeader className="p-6 pb-5 bg-gradient-to-r from-primary/15 via-primary/10 to-transparent border-b border-white/10">
+                    <DialogTitle className="text-2xl font-bold flex items-center gap-3">
+                      <div className="p-2.5 rounded-xl bg-gradient-to-br from-primary/30 to-primary/20 border border-primary/30">
+                        <Coins className="w-6 h-6 text-primary" />
+                      </div>
+                      Mint Funds
+                    </DialogTitle>
+                    <DialogDescription className="text-sm font-medium text-muted-foreground/80 mt-2">
+                      Request $PRAF tokens from the local dev testnet aggregator for testing.
                     </DialogDescription>
                   </DialogHeader>
 
-                  <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="mintAmount">Amount (PRAF)</Label>
-                      <Input
-                        id="mintAmount"
-                        value={mintAmount}
-                        onChange={(e) => setMintAmount(e.target.value)}
-                        placeholder="e.g. 10.00"
-                        className="h-12 bg-white/5 border-none ring-1 ring-white/10 focus-visible:ring-primary"
-                      />
+                  <div className="p-6 space-y-5">
+                    <div className="space-y-3">
+                      <Label htmlFor="mintAmount" className="text-sm font-bold text-foreground/90">Amount</Label>
+                      <div className="relative group">
+                        <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/20 via-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 rounded-lg transition-opacity pointer-events-none" />
+                        <Input
+                          id="mintAmount"
+                          type="number"
+                          value={mintAmount}
+                          onChange={(e) => setMintAmount(e.target.value)}
+                          placeholder="0.00"
+                          className="h-14 bg-white/5 border border-white/10 ring-0 focus-visible:ring-2 focus-visible:ring-emerald-500/50 focus-visible:border-emerald-500/50 pr-16 text-lg font-semibold transition-all"
+                          disabled={mintMutation.isPending}
+                        />
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-emerald-500/70">
+                          PRAF
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="mintMemo">Memo (Optional)</Label>
-                      <Input
-                        id="mintMemo"
-                        value={mintMemo}
-                        onChange={(e) => setMintMemo(e.target.value)}
-                        placeholder="What's this for?"
-                        className="h-12 bg-white/5 border-none ring-1 ring-white/10"
-                      />
+                    <div className="space-y-3">
+                      <Label htmlFor="mintMemo" className="text-sm font-bold text-foreground/90">
+                        Memo <span className="text-xs text-muted-foreground/60 font-normal">(Optional)</span>
+                      </Label>
+                      <div className="relative group">
+                        <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 via-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 rounded-lg transition-opacity pointer-events-none" />
+                        <Input
+                          id="mintMemo"
+                          value={mintMemo}
+                          onChange={(e) => setMintMemo(e.target.value)}
+                          placeholder="What's this for?"
+                          className="h-14 bg-white/5 border border-white/10 ring-0 focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:border-purple-500/50 transition-all"
+                          disabled={mintMutation.isPending}
+                        />
+                      </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <Label>Priority</Label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {["low", "medium", "high"].map((level) => (
-                          <Button
+                    <div className="space-y-3">
+                      <Label className="text-sm font-bold text-foreground/90">Priority</Label>
+                      <div className="grid grid-cols-3 gap-2 p-1.5 rounded-lg bg-gradient-to-br from-background/80 to-background/40 border border-white/10">
+                        {(["low", "medium", "high"] as const).map((level) => (
+                          <button
                             key={level}
                             type="button"
-                            variant={mintTip === level ? "default" : "outline"}
-                            className="capitalize h-10 border-none ring-1 ring-white/10"
-                            onClick={() => setMintTip(level as any)}
+                            onClick={() => setMintTip(level)}
+                            disabled={mintMutation.isPending}
+                            className={`h-11 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${mintTip === level
+                              ? "bg-gradient-to-r from-primary to-primary/80 text-black shadow-lg shadow-primary/30 scale-[1.02]"
+                              : "text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                              }`}
                           >
                             {level}
-                          </Button>
+                          </button>
                         ))}
                       </div>
                     </div>
                   </div>
 
-                  <DialogFooter className="pt-2">
+                  <DialogFooter className="p-6 pt-0">
                     <Button
-                      className="w-full h-12 font-bold text-lg shadow-lg shadow-primary/20"
+                      className="w-full h-14 text-lg font-bold bg-gradient-to-r from-primary via-primary/90 to-primary shadow-2xl shadow-primary/30 hover:shadow-primary/40 transition-all hover:scale-[1.02] active:scale-[0.98] group relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={() =>
                         mintMutation.mutate({
                           amount: mintAmount,
@@ -334,7 +353,11 @@ export default function DashboardPage() {
                       }
                       disabled={!mintAmount || mintMutation.isPending}
                     >
-                      {mintMutation.isPending ? "Processing..." : "Submit Mint Order"}
+                      <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+                      <span className="relative z-10 flex items-center gap-2">
+                        <Coins className="w-5 h-5" />
+                        {mintMutation.isPending ? "Processing..." : "Submit Mint Order"}
+                      </span>
                     </Button>
                   </DialogFooter>
                 </DialogContent>
