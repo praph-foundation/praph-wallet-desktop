@@ -444,19 +444,22 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
     Ok(out)
 }
 
-pub fn list_spendable_notes(db: &DbState) -> Result<Vec<SpendableNoteRow>, String> {
+pub fn list_spendable_notes(
+    db: &DbState,
+    fingerprint: &str,
+) -> Result<Vec<SpendableNoteRow>, String> {
     let conn = open_db(db)?;
     let mut stmt = conn
         .prepare(
             "SELECT commitment, commitment_index, amount_minor, nonce, nullifier \
              FROM notes \
-             WHERE spent=0 AND nonce IS NOT NULL AND nonce <> '' AND nullifier IS NOT NULL AND nullifier <> '' \
-             ORDER BY amount_minor ASC",
+             WHERE spent=0 AND fingerprint=?1 AND nonce IS NOT NULL AND nonce <> '' AND nullifier IS NOT NULL AND nullifier <> '' \
+             ORDER BY amount_minor DESC",
         )
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![fingerprint], |r| {
             Ok(SpendableNoteRow {
                 commitment: r.get(0)?,
                 commitment_index: r.get::<_, i64>(1)? as u64,

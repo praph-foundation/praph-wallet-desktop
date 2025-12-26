@@ -778,7 +778,8 @@ pub async fn send_transaction(
     let to_sk = SpendingKey::from_bytes(to_bytes);
     let to_fvk = to_sk.derive_full_viewing_key();
 
-    let spendable = db::list_spendable_notes(&db)?;
+    let sender_fingerprint = hex::encode(sender_fvk.fingerprint());
+    let spendable = db::list_spendable_notes(&db, &sender_fingerprint)?;
     let mut selected = Vec::new();
     let mut total_selected: i64 = 0;
     for n in spendable {
