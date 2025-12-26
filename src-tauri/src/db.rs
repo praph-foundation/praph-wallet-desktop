@@ -13,6 +13,8 @@ pub struct NoteRow {
     pub memo: Option<String>,
     pub received_at: u64,
     pub spent: bool,
+    pub tx_hash: Option<String>,
+    pub sender: Option<String>,
 }
 
 pub fn list_transactions_for_account(
@@ -27,21 +29,25 @@ pub fn list_transactions_for_account(
         if n.memo.as_deref() == Some("change") {
             continue;
         }
+        // Use tx_hash as ID if available, otherwise fallback to commitment
+        let id = n.tx_hash.clone().unwrap_or(n.commitment.clone());
         out.push(TxSummary {
-            id: format!("note_{}", n.commitment),
+            id,
             direction: TxDirection::Incoming,
             amount: format_amount_minor(n.amount_minor),
             fee: "0.0000 PRAF".to_string(),
-            memo: n.memo,
+            memo: n.memo.clone(),
             timestamp: n.received_at,
             status: TxStatus::Confirmed,
+            recipient_address: None,  // Incoming: no recipient
+            sender_address: n.sender, // Sender's fingerprint (not SS58 yet)
         });
     }
 
     let conn = open_db(db)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, direction, amount, fee, memo, timestamp, status FROM transactions WHERE account_index=?1",
+            "SELECT id, direction, amount, fee, memo, timestamp, status, recipient_address FROM transactions WHERE account_index=?1",
         )
         .map_err(|e| e.to_string())?;
 
@@ -49,6 +55,7 @@ pub fn list_transactions_for_account(
         .query_map(params![account_index as i64], |r| {
             let direction: String = r.get(1)?;
             let status: String = r.get(6)?;
+            let recipient_address: Option<String> = r.get(7)?;
 
             let direction = match direction.as_str() {
                 "incoming" => TxDirection::Incoming,
@@ -77,6 +84,8 @@ pub fn list_transactions_for_account(
                 memo: r.get(4)?,
                 timestamp: r.get::<_, i64>(5)? as u64,
                 status,
+                recipient_address,
+                sender_address: None, // Outgoing: no sender
             })
         })
         .map_err(|e| e.to_string())?;
@@ -222,6 +231,55 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
         }
     }
 
+    // Migration: notes.tx_hash and notes.sender
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(notes)")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut has_tx_hash = false;
+        let mut has_sender = false;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let name: String = row.get(1).map_err(|e| e.to_string())?;
+            if name == "tx_hash" {
+                has_tx_hash = true;
+            } else if name == "sender" {
+                has_sender = true;
+            }
+        }
+        if !has_tx_hash {
+            conn.execute("ALTER TABLE notes ADD COLUMN tx_hash TEXT", [])
+                .map_err(|e| e.to_string())?;
+        }
+        if !has_sender {
+            conn.execute("ALTER TABLE notes ADD COLUMN sender TEXT", [])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Migration: transactions.recipient_address for SS58 address storage
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(transactions)")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        let mut has_recipient_address = false;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let name: String = row.get(1).map_err(|e| e.to_string())?;
+            if name == "recipient_address" {
+                has_recipient_address = true;
+                break;
+            }
+        }
+        if !has_recipient_address {
+            conn.execute(
+                "ALTER TABLE transactions ADD COLUMN recipient_address TEXT",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
     // Legacy cleanup: remove demo placeholder transactions if they exist.
     let _ = conn.execute("DELETE FROM transactions WHERE id LIKE 'tx_demo_%'", []);
 
@@ -319,26 +377,31 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
         if n.memo.as_deref() == Some("change") {
             continue;
         }
+        // Use tx_hash as ID if available, otherwise fallback to commitment
+        let id = n.tx_hash.clone().unwrap_or(n.commitment.clone());
         out.push(TxSummary {
-            id: format!("note_{}", n.commitment),
+            id,
             direction: TxDirection::Incoming,
             amount: format_amount_minor(n.amount_minor),
             fee: "0.0000 PRAF".to_string(),
-            memo: n.memo,
+            memo: n.memo.clone(),
             timestamp: n.received_at,
             status: TxStatus::Confirmed,
+            recipient_address: None,
+            sender_address: n.sender,
         });
     }
 
     let conn = open_db(db)?;
     let mut stmt = conn
-        .prepare("SELECT id, direction, amount, fee, memo, timestamp, status FROM transactions")
+        .prepare("SELECT id, direction, amount, fee, memo, timestamp, status, recipient_address FROM transactions")
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
         .query_map([], |r| {
             let direction: String = r.get(1)?;
             let status: String = r.get(6)?;
+            let recipient_address: Option<String> = r.get(7)?;
 
             let direction = match direction.as_str() {
                 "incoming" => TxDirection::Incoming,
@@ -367,6 +430,8 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
                 memo: r.get(4)?,
                 timestamp: r.get::<_, i64>(5)? as u64,
                 status,
+                recipient_address,
+                sender_address: None,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -445,7 +510,7 @@ pub fn list_notes_for_fingerprint(db: &DbState, fingerprint: &str) -> Result<Vec
     let conn = open_db(db)?;
     let mut stmt = conn
         .prepare(
-            "SELECT commitment, commitment_index, amount_minor, memo, received_at, spent \
+            "SELECT commitment, commitment_index, amount_minor, memo, received_at, spent, tx_hash, sender \
              FROM notes WHERE fingerprint=?1 ORDER BY received_at DESC",
         )
         .map_err(|e| e.to_string())?;
@@ -459,6 +524,8 @@ pub fn list_notes_for_fingerprint(db: &DbState, fingerprint: &str) -> Result<Vec
                 memo: r.get(3)?,
                 received_at: r.get::<_, i64>(4)? as u64,
                 spent: r.get::<_, i64>(5)? != 0,
+                tx_hash: r.get(6)?,
+                sender: r.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -607,6 +674,21 @@ pub fn reconstruct_outgoing_transactions(
     Ok(())
 }
 
+/// Update outgoing transaction ID with L1 tx_hash after polling
+pub fn update_outgoing_tx_hash(
+    db: &DbState,
+    old_tx_id: &str,
+    new_tx_hash: &str,
+) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute(
+        "UPDATE transactions SET id=?1 WHERE id=?2",
+        params![new_tx_hash, old_tx_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn insert_outgoing(
     db: &DbState,
     tx_id: String,
@@ -616,6 +698,7 @@ pub fn insert_outgoing(
     memo: Option<String>,
     status: &str,
     nullifiers: Option<Vec<String>>,
+    recipient_address: Option<&str>,
 ) -> Result<(), String> {
     let conn = open_db(db)?;
     let amount_minor = parse_amount_minor(&amount);
@@ -624,8 +707,8 @@ pub fn insert_outgoing(
     let nullifiers_json = nullifiers.map(|n| serde_json::to_string(&n).unwrap_or_default());
 
     conn.execute(
-        "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status, account_index, nullifiers)\
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status, account_index, nullifiers, recipient_address)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             tx_id,
             "outgoing",
@@ -637,7 +720,8 @@ pub fn insert_outgoing(
             ts,
             status,
             account_index as i64,
-            nullifiers_json
+            nullifiers_json,
+            recipient_address
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -667,11 +751,13 @@ pub fn upsert_note(
     received_at: u64,
     nullifier_hex: &str,
     spent: bool,
+    tx_hash: Option<&str>,
+    sender: Option<&str>,
 ) -> Result<(), String> {
     let conn = open_db(db)?;
     conn.execute(
-        "INSERT INTO notes (commitment, commitment_index, fingerprint, encrypted_memo, amount_minor, memo, nonce, received_at, nullifier, spent)\
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)\
+        "INSERT INTO notes (commitment, commitment_index, fingerprint, encrypted_memo, amount_minor, memo, nonce, received_at, nullifier, spent, tx_hash, sender)\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)\
          ON CONFLICT(commitment) DO UPDATE SET \
            commitment_index=excluded.commitment_index,\
            fingerprint=excluded.fingerprint,\
@@ -681,7 +767,9 @@ pub fn upsert_note(
            nonce=excluded.nonce,\
            received_at=excluded.received_at,\
            nullifier=excluded.nullifier,\
-           spent=CASE WHEN excluded.spent=1 OR notes.spent=1 THEN 1 ELSE 0 END",
+           spent=CASE WHEN excluded.spent=1 OR notes.spent=1 THEN 1 ELSE 0 END,\
+           tx_hash=excluded.tx_hash,\
+           sender=excluded.sender",
         params![
             commitment,
             commitment_index as i64,
@@ -692,7 +780,9 @@ pub fn upsert_note(
             nonce,
             received_at as i64,
             nullifier_hex,
-            if spent { 1i64 } else { 0i64 }
+            if spent { 1i64 } else { 0i64 },
+            tx_hash,
+            sender
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -703,7 +793,7 @@ pub fn list_notes(db: &DbState) -> Result<Vec<NoteRow>, String> {
     let conn = open_db(db)?;
     let mut stmt = conn
         .prepare(
-            "SELECT commitment, commitment_index, amount_minor, memo, received_at, spent FROM notes ORDER BY received_at DESC",
+            "SELECT commitment, commitment_index, amount_minor, memo, received_at, spent, tx_hash, sender FROM notes ORDER BY received_at DESC",
         )
         .map_err(|e| e.to_string())?;
 
@@ -716,6 +806,8 @@ pub fn list_notes(db: &DbState) -> Result<Vec<NoteRow>, String> {
                 memo: r.get(3)?,
                 received_at: r.get::<_, i64>(4)? as u64,
                 spent: r.get::<_, i64>(5)? != 0,
+                tx_hash: r.get(6)?,
+                sender: r.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;

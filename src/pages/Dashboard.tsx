@@ -455,6 +455,40 @@ export default function DashboardPage() {
                 </div>
               )}
 
+              {/* Recipient Address (for outgoing transactions) */}
+              {selectedTx.direction === "outgoing" && selectedTx.recipientAddress && (
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-[10px] uppercase font-bold px-1">Recipient</Label>
+                  <div className="group relative flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-white/5 ring-1 ring-slate-200 dark:ring-white/10">
+                    <div className="flex-1 min-w-0 font-mono text-xs break-all leading-relaxed">
+                      {selectedTx.recipientAddress}
+                    </div>
+                    <CopyButton
+                      value={selectedTx.recipientAddress}
+                      label=""
+                      className="shrink-0 h-8 w-8 rounded-lg bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Sender Address (for incoming transactions) */}
+              {selectedTx.direction === "incoming" && selectedTx.senderAddress && (
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-[10px] uppercase font-bold px-1">Sender</Label>
+                  <div className="group relative flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-white/5 ring-1 ring-slate-200 dark:ring-white/10">
+                    <div className="flex-1 min-w-0 font-mono text-xs break-all leading-relaxed">
+                      {selectedTx.senderAddress}
+                    </div>
+                    <CopyButton
+                      value={selectedTx.senderAddress}
+                      label=""
+                      className="shrink-0 h-8 w-8 rounded-lg bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3 pt-2">
                 <Button
                   variant="outline"

@@ -42,6 +42,10 @@ pub struct TxSummary {
     pub memo: Option<String>,
     pub timestamp: u64,
     pub status: TxStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_address: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

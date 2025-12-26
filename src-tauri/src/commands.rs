@@ -291,6 +291,7 @@ enum HelperRequest {
     GetCommitmentPathForIndex { commitment_index: u64 },
     GenerateWitnesses { spends: Vec<SpendRequest> },
     SimulateAddCommitments { commitments: Vec<String> },
+    GetCommitmentStatus { commitment: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,6 +325,12 @@ enum HelperResponse {
     SimulateAddCommitmentsResult {
         new_commitment_root: String,
     },
+    CommitmentStatusResult {
+        exists: bool,
+        commitment_index: Option<u64>,
+        tx_hash: Option<String>,
+        spent: bool,
+    },
     Error {
         message: String,
     },
@@ -335,6 +342,8 @@ struct EncryptedNoteResponse {
     pub commitment_index: u64,
     pub encrypted_memo: Option<String>,
     pub fingerprint: String,
+    pub tx_hash: Option<String>,
+    pub sender_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -536,6 +545,8 @@ async fn scan_notes_impl(
             now,
             &nullifier_hex,
             spent,
+            note.tx_hash.as_deref(),
+            note.sender_fingerprint.as_deref(),
         )?;
 
         max_idx = Some(
@@ -643,11 +654,32 @@ async fn scan_notes_impl(
                                     let mut amount_bytes = [0u8; 16];
                                     amount_bytes.copy_from_slice(&plaintext[32..48]);
                                     let amount = u128::from_le_bytes(amount_bytes);
+                                    // Helper function to split memo and text
+                                    // Format: memo + \0 + tx_id OR just memo (legacy)
                                     let memo_bytes = &plaintext[48..];
-                                    let memo_text = String::from_utf8_lossy(memo_bytes).to_string();
+                                    let memo_full = String::from_utf8_lossy(memo_bytes).to_string();
+
+                                    // Try to split by null byte
+                                    let (memo_text, minter_tx_id) = if let Some(idx) =
+                                        memo_bytes.iter().position(|&b| b == 0)
+                                    {
+                                        let memo_part =
+                                            String::from_utf8_lossy(&memo_bytes[..idx]).to_string();
+                                        // tx_id starts after the null byte
+                                        let tx_id_part =
+                                            String::from_utf8_lossy(&memo_bytes[idx + 1..])
+                                                .to_string();
+                                        (memo_part, Some(tx_id_part))
+                                    } else {
+                                        (memo_full, None)
+                                    };
 
                                     // Create synthetic outgoing transaction
-                                    let tx_id = format!("ovk_recovered_{}", note.commitment_index);
+                                    // Use recovered tx_id if available, otherwise generate one
+                                    let tx_id = minter_tx_id.unwrap_or_else(|| {
+                                        format!("ovk_recovered_{}", note.commitment_index)
+                                    });
+
                                     let memo_opt = if memo_text.is_empty() {
                                         None
                                     } else {
@@ -671,6 +703,7 @@ async fn scan_notes_impl(
                                         memo_opt,
                                         "confirmed",
                                         None,
+                                        None, // No recipient for recovered outgoing
                                     );
                                 }
                             }
@@ -1083,11 +1116,13 @@ pub async fn send_transaction(
         encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
 
     // OVK: Build outgoing metadata for sender-side recovery
-    // Contains: recipient fingerprint (32 bytes) + amount (16 bytes) + memo text
-    let mut outgoing_plaintext = Vec::with_capacity(48 + memo_text.len());
+    // Contains: recipient fingerprint (32 bytes) + amount (16 bytes) + memo text + \0 + tx_id
+    let mut outgoing_plaintext = Vec::with_capacity(48 + memo_text.len() + 1 + tx_id.len());
     outgoing_plaintext.extend_from_slice(to_fvk.fingerprint()); // 32 bytes: recipient fingerprint
     outgoing_plaintext.extend_from_slice(&amount_minor_u128.to_le_bytes()); // 16 bytes: amount
     outgoing_plaintext.extend_from_slice(memo_text.as_bytes()); // variable: memo
+    outgoing_plaintext.push(0u8); // Separator
+    outgoing_plaintext.extend_from_slice(tx_id.as_bytes()); // variable: tx_id
 
     // Encrypt with sender's OVK-derived key (using OVK as symmetric key like memo_key)
     let mut outgoing_nonce = [0u8; 12];
@@ -1166,10 +1201,58 @@ pub async fn send_transaction(
         params.memo.clone(),
         "pending",
         Some(nullifier_hexs),
+        Some(&params.to), // Recipient SS58 address
     )?;
 
     // Note: We don't mark notes as spent here. They will be marked as spent
     // when the transaction is confirmed and scan_notes_impl detects the nullifiers on-chain.
+
+    // Poll helper-service for tx_hash (commitment status polling)
+    // We poll the output commitment to get the L1 tx_hash
+    let output_commitment_hex = hex::encode(output_commitment_bytes);
+    let helper_url_base = db::get_helper_service_url(&db)?;
+    let helper_url = format!("{}/api/v1/helper", helper_url_base.trim_end_matches('/'));
+
+    // Spawn async task to poll for tx_hash and update DB
+    let tx_id_clone = tx_id.clone();
+    let db_path_clone = db.db_path.clone();
+    tokio::spawn(async move {
+        let db_clone = DbState {
+            db_path: db_path_clone,
+        };
+        let http = reqwest::Client::new();
+        let max_attempts = 30; // Poll for up to 30 seconds
+
+        for attempt in 1..=max_attempts {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+            let request = HelperRequest::GetCommitmentStatus {
+                commitment: output_commitment_hex.clone(),
+            };
+
+            if let Ok(resp) = http.post(&helper_url).json(&request).send().await {
+                if let Ok(helper_resp) = resp.json::<HelperResponse>().await {
+                    if let HelperResponse::CommitmentStatusResult {
+                        tx_hash: Some(hash),
+                        ..
+                    } = helper_resp
+                    {
+                        eprintln!("✅ Got tx_hash after {} attempts: {}", attempt, hash);
+                        // Update transaction ID with L1 tx_hash
+                        if let Err(e) = db::update_outgoing_tx_hash(&db_clone, &tx_id_clone, &hash)
+                        {
+                            eprintln!("Failed to update tx_hash: {}", e);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "⚠️  Tx hash polling timeout after {} attempts for tx {}",
+            max_attempts, tx_id_clone
+        );
+    });
 
     Ok(SendResult { tx_id })
 }
@@ -1460,7 +1543,17 @@ pub fn bridge_deposit(
         .memo
         .map(|m| format!("L2: {} · {m}", params.l2_address));
     // Bridge deposit is currently account-agnostic; treat it as account 0.
-    db::insert_outgoing(&db, tx_id.clone(), 0, amount, fee, memo, "pending", None)?;
+    db::insert_outgoing(
+        &db,
+        tx_id.clone(),
+        0,
+        amount,
+        fee,
+        memo,
+        "pending",
+        None,
+        Some(&params.l2_address),
+    )?;
     Ok(BridgeDepositResult { tx_id })
 }
 
