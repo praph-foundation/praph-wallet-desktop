@@ -993,30 +993,42 @@ pub async fn send_transaction(
 
     let mut action_proofs_json: Vec<serde_json::Value> = Vec::new();
 
-    for spend_action in private_inputs.spend_actions.iter() {
-        if !spend_action.enabled {
-            continue;
-        }
-        let nullifier = spend_action.note.nullifier(spend_action.commitment_index);
-        let circuit = ClientActionCircuit::from_spend_action(
-            commitment_root_fr,
-            nullifier_root_fr,
-            spend_action.clone(),
-        );
-        let proof = create_client_action_proof(&spend_params, &spend_pk, &circuit, &mut rng)
-            .map_err(|e| format!("failed to generate spend proof: {e:?}"))?;
-        let spend_pi = serde_json::json!({
-            "commitment_root": hex::encode(fr_to_bytes(&commitment_root_fr)),
-            "nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
-            "next_commitment_root": hex::encode(fr_to_bytes(&commitment_root_fr)),
-            "next_nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
-            "action_output": hex::encode(fr_to_bytes(&nullifier)),
-        });
-        action_proofs_json.push(serde_json::json!({
-            "proof": hex::encode(&proof),
-            "public_inputs": spend_pi,
-            "action_type": "spend",
-        }));
+    // Generate spend proofs in parallel using rayon (CPU-bound, independent proofs)
+    use rayon::prelude::*;
+    let spend_proof_results: Vec<Result<serde_json::Value, String>> = private_inputs
+        .spend_actions
+        .par_iter()
+        .filter(|sa| sa.enabled)
+        .map(|spend_action| {
+            // Each thread gets its own RNG for proof generation
+            let mut thread_rng = rand::thread_rng();
+            let nullifier = spend_action.note.nullifier(spend_action.commitment_index);
+            let circuit = ClientActionCircuit::from_spend_action(
+                commitment_root_fr,
+                nullifier_root_fr,
+                spend_action.clone(),
+            );
+            let proof =
+                create_client_action_proof(&spend_params, &spend_pk, &circuit, &mut thread_rng)
+                    .map_err(|e| format!("failed to generate spend proof: {e:?}"))?;
+            let spend_pi = serde_json::json!({
+                "commitment_root": hex::encode(fr_to_bytes(&commitment_root_fr)),
+                "nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
+                "next_commitment_root": hex::encode(fr_to_bytes(&commitment_root_fr)),
+                "next_nullifier_root": hex::encode(fr_to_bytes(&nullifier_root_fr)),
+                "action_output": hex::encode(fr_to_bytes(&nullifier)),
+            });
+            Ok(serde_json::json!({
+                "proof": hex::encode(&proof),
+                "public_inputs": spend_pi,
+                "action_type": "spend",
+            }))
+        })
+        .collect();
+
+    // Collect parallel results, propagating any errors
+    for result in spend_proof_results {
+        action_proofs_json.push(result?);
     }
 
     // Pre-calculate next commitment roots using Helper Service (Merkle Logic)
@@ -1483,48 +1495,46 @@ pub async fn mint_dev_faucet(
         ));
     }
 
-    // Wait for helper-service to index the minted commitment before scanning.
-    // Otherwise scan_notes may return no notes and the UI won't show updated balance.
-    {
+    // Soft-confirmation: Return immediately after Prover accepts.
+    // L1 indexing poll is moved to background so the UI feels instant.
+    // Balance will update when user refreshes or periodic sync runs.
+    let helper_url_clone = helper_url.clone();
+    let fingerprint_clone = fingerprint_hex.clone();
+    let commitment_clone = output_commitment_hex.clone();
+
+    tokio::spawn(async move {
         use tokio::time::{sleep, Duration, Instant};
-        let deadline = Instant::now() + Duration::from_secs(180);
+        let http = reqwest::Client::new();
+        let deadline = Instant::now() + Duration::from_secs(60);
+
         loop {
             let resp = http
-                .post(&helper_url)
+                .post(&helper_url_clone)
                 .json(&HelperRequest::GetMemosByFingerprint {
-                    fingerprint: fingerprint_hex.clone(),
+                    fingerprint: fingerprint_clone.clone(),
                 })
                 .send()
                 .await;
 
             if let Ok(r) = resp {
                 if let Ok(parsed) = r.json::<HelperResponse>().await {
-                    match parsed {
-                        HelperResponse::GetMemosByFingerprintResult { notes } => {
-                            if notes.iter().any(|n| n.commitment == output_commitment_hex) {
-                                break;
-                            }
+                    if let HelperResponse::GetMemosByFingerprintResult { notes } = parsed {
+                        if notes.iter().any(|n| n.commitment == commitment_clone) {
+                            eprintln!("✅ Mint indexed on L1. Balance will update on next sync.");
+                            break;
                         }
-                        HelperResponse::Error { message } => {
-                            return Err(format!(
-                                "helper-service error while waiting for mint indexing: {message}"
-                            ));
-                        }
-                        _ => {}
                     }
                 }
             }
 
             if Instant::now() >= deadline {
-                // Indexing can lag behind prover acceptance. Don't hard-fail mint; return success
-                // and let periodic scan/rescan pick it up later.
+                eprintln!("⚠️ Background mint indexing poll timed out (60s).");
                 break;
             }
             sleep(Duration::from_secs(2)).await;
         }
-    }
+    });
 
-    let _ = scan_notes_impl(&wallet, &db, ScanNotesParams { full_rescan: false }).await?;
     Ok(MintDevFaucetResult { tx_id })
 }
 
