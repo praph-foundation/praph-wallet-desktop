@@ -226,6 +226,7 @@ interface WalletApi {
   sendTransaction: (params: SendParams) => Promise<SendResult>;
   mintDevFaucet: (params: MintDevFaucetParams) => Promise<MintDevFaucetResult>;
   bridgeDeposit: (params: BridgeDepositParams) => Promise<BridgeDepositResult>;
+  updateBridgeStatus: (txId: string) => Promise<string>;
   generateAddress: () => Promise<AddressResult>;
   getAccountsState: () => Promise<AccountsState>;
   createAccount: () => Promise<AccountsState>;
@@ -280,6 +281,8 @@ const tauriApi: WalletApi = {
     invokeSafe<MintDevFaucetResult>("mint_dev_faucet", { params }),
   bridgeDeposit: (params: BridgeDepositParams) =>
     invokeSafe<BridgeDepositResult>("bridge_deposit", { params }),
+  updateBridgeStatus: (txId: string) =>
+    invoke<string>("update_bridge_status", { txId }),
 
   generateAddress: () => invokeSafe<AddressResult>("generate_address"),
 
@@ -474,6 +477,11 @@ const mockApi: WalletApi = {
     throw new Error(
       "bridgeDeposit is only available in the Tauri desktop app (backend required)"
     );
+  },
+
+  updateBridgeStatus: async (_txId: string): Promise<string> => {
+    await sleep(50);
+    return "pending"; // Mock always returns pending
   },
 
   getSettings: async (): Promise<Settings> => {

@@ -55,6 +55,8 @@ pub struct SendParams {
     pub amount: String,
     pub memo: Option<String>,
     pub prover_tip: String,
+    #[serde(default)]
+    pub l2_recipient: Option<String>, // EVM address for bridge deposits
 }
 
 #[derive(Debug, Deserialize)]

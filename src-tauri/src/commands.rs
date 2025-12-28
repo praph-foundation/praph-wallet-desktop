@@ -994,10 +994,18 @@ pub async fn send_transaction(
     let sender_sk = SpendingKey::from_bytes(spending_key_bytes);
     let sender_fvk = sender_sk.derive_full_viewing_key();
 
+    // Bridge mode: skip recipient output, funds go to L2
+    let is_bridge_deposit = params.l2_recipient.is_some();
+
     // Parse recipient address as IVK bytes (address = SS58(IVK))
-    // This is the correct approach for Option 2: sender only needs recipient's IVK
-    let to_ivk_bytes = parse_recipient_32(&params.to)?;
-    let to_ivk = IncomingViewingKey::from_bytes(to_ivk_bytes);
+    // Skip for bridge deposits - no L1 recipient needed
+    let (to_ivk_bytes, to_ivk) = if !is_bridge_deposit {
+        let bytes = parse_recipient_32(&params.to)?;
+        let ivk = IncomingViewingKey::from_bytes(bytes);
+        (bytes, Some(ivk))
+    } else {
+        ([0u8; 32], None)
+    };
 
     let sender_fingerprint = hex::encode(sender_fvk.fingerprint());
 
@@ -1147,28 +1155,30 @@ pub async fn send_transaction(
     }
 
     let mut rng = ChaCha20Rng::from_entropy();
-    let mut output_nonce = [0u8; 32];
-    rng.fill_bytes(&mut output_nonce);
+    let mut output_actions = Vec::new();
+    let mut output_commitments = Vec::new();
 
-    // Use IVK bytes for recipient commitment calculation (Option 2)
-    let recipient_commitment = fr_from_bytes(&to_ivk_bytes);
-    // Use new_for_recipient - sender doesn't know recipient's SK
-    let output_note = Note::new_for_recipient(
-        to_ivk.clone(),
-        amount_minor_u128,
-        recipient_commitment,
-        output_nonce,
-    );
-    let output_commitment = output_note.commitment();
-    let output_commitment_bytes = fr_to_bytes(&output_commitment);
-    let _output_commitment_hex = hex::encode(output_commitment_bytes);
+    // Create recipient output only for normal transfers (not bridge deposits)
+    if !is_bridge_deposit {
+        let mut output_nonce = [0u8; 32];
+        rng.fill_bytes(&mut output_nonce);
 
-    let mut output_actions = vec![OutputAction {
-        note: output_note.clone(),
-        enabled: true,
-    }];
-
-    let mut output_commitments = vec![output_commitment];
+        // Use IVK bytes for recipient commitment calculation (Option 2)
+        let recipient_commitment = fr_from_bytes(&to_ivk_bytes);
+        // Use new_for_recipient - sender doesn't know recipient's SK
+        let output_note = Note::new_for_recipient(
+            to_ivk.clone().ok_or("Missing recipient IVK")?,
+            amount_minor_u128,
+            recipient_commitment,
+            output_nonce,
+        );
+        let output_commitment = output_note.commitment();
+        output_actions.push(OutputAction {
+            note: output_note.clone(),
+            enabled: true,
+        });
+        output_commitments.push(output_commitment);
+    }
 
     // Calculate actual change amount (minus prover tip if prover address available)
     let actual_change_amount = change_amount_u128;
@@ -1405,57 +1415,131 @@ pub async fn send_transaction(
         "encrypted_l2_message": hex::encode(&final_public_inputs.encrypted_l2_message),
     });
 
-    let memo_text = params.memo.clone().unwrap_or_default();
-    let memo_plaintext = build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
-    let mut memo_nonce = [0u8; 12];
-    rng.fill_bytes(&mut memo_nonce);
+    // Memo encryption and outgoing transaction recording (skip for bridge deposits)
+    if !is_bridge_deposit {
+        let to_ivk_unwrapped = to_ivk.as_ref().ok_or("Missing recipient IVK")?;
+        let output_commitment_bytes = fr_to_bytes(&output_commitments[0]); // First output is recipient
 
-    // ECDH-based memo encryption using TransactionViewKey
-    // 1. Generate ephemeral secret for this transaction
-    let mut ephemeral_secret = [0u8; 32];
-    rng.fill_bytes(&mut ephemeral_secret);
+        let memo_text = params.memo.clone().unwrap_or_default();
+        let output_nonce = [0u8; 32]; // Get from output creation above
+        let memo_plaintext =
+            build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
+        let mut memo_nonce = [0u8; 12];
+        rng.fill_bytes(&mut memo_nonce);
 
-    // 2. Derive shared secret using sender's ephemeral key + recipient's IVK
-    let tvk = TransactionViewKey::derive_sender(&ephemeral_secret, &to_ivk);
-    let ephemeral_public = tvk.ephemeral_public();
+        // ECDH-based memo encryption using TransactionViewKey
+        // 1. Generate ephemeral secret for this transaction
+        let mut ephemeral_secret = [0u8; 32];
+        rng.fill_bytes(&mut ephemeral_secret);
 
-    // 3. Encrypt memo with shared secret (instead of memo_key)
-    let encrypted_memo = encrypt_memo_v1(&memo_plaintext, tvk.shared_secret(), &memo_nonce)?;
+        // 2. Derive TransactionViewKey from ephemeral secret + recipient IVK
+        let tvk = TransactionViewKey::derive_sender(&ephemeral_secret, to_ivk_unwrapped);
 
-    // Use only prover tip as the user-facing fee (network fees are subsidized/handled by prover)
-    let fee = format!("{:.4} PRAF", prover_tip_val);
+        // 3. Encrypt memo with TVK
+        let memo_ciphertext = encrypt_memo_v1(&memo_plaintext, tvk.shared_secret(), &memo_nonce)?;
 
-    // OVK: Build outgoing metadata for sender-side recovery
-    // Contains: recipient IVK (32 bytes) + amount (16 bytes) + memo text + \0 + tx_id + \0 + fee + \0 + recipient_address
-    let mut outgoing_plaintext = Vec::with_capacity(48 + memo_text.len() + 1 + tx_id.len());
-    outgoing_plaintext.extend_from_slice(&to_ivk_bytes); // 32 bytes: recipient IVK (used as fingerprint)
-    outgoing_plaintext.extend_from_slice(&amount_minor_u128.to_le_bytes()); // 16 bytes: amount
-    outgoing_plaintext.extend_from_slice(memo_text.as_bytes()); // variable: memo
-    outgoing_plaintext.push(0u8); // Separator
-    outgoing_plaintext.extend_from_slice(tx_id.as_bytes()); // variable: tx_id
-    outgoing_plaintext.push(0u8); // Separator
-    outgoing_plaintext.extend_from_slice(fee.as_bytes()); // variable: fee
-    outgoing_plaintext.push(0u8); // Separator
-    outgoing_plaintext.extend_from_slice(params.to.as_bytes()); // variable: recipient_address
+        // 4. Construct outgoing ciphertext for sender's recovery
+        // Format: nonce (32 bytes) + amount (16 bytes) + recipient_ivk (32 bytes)
+        let mut outgoing_plaintext = Vec::new();
+        let mut outgoing_nonce_bytes = [0u8; 32];
+        rng.fill_bytes(&mut outgoing_nonce_bytes);
+        outgoing_plaintext.extend_from_slice(&outgoing_nonce_bytes); // 32 bytes: nonce
+        let amount_bytes = amount_minor_u128.to_le_bytes();
+        outgoing_plaintext.extend_from_slice(&amount_bytes); // 16 bytes: amount
+        outgoing_plaintext.extend_from_slice(&to_ivk_bytes); // 32 bytes: recipient IVK (used as fingerprint)
 
-    // Encrypt with sender's OVK-derived key (using OVK as symmetric key like memo_key)
-    let mut outgoing_nonce = [0u8; 12];
-    rng.fill_bytes(&mut outgoing_nonce);
-    let outgoing_ciphertext = encrypt_memo_v1(
-        &outgoing_plaintext,
-        sender_fvk.outgoing().as_bytes(),
-        &outgoing_nonce,
-    )?;
+        let outgoing_tvk =
+            TransactionViewKey::derive_sender(&outgoing_nonce_bytes, sender_fvk.incoming());
+        let mut outgoing_memo_nonce = [0u8; 12];
+        rng.fill_bytes(&mut outgoing_memo_nonce);
+        let outgoing_ciphertext = encrypt_memo_v1(
+            &outgoing_plaintext,
+            outgoing_tvk.shared_secret(),
+            &outgoing_memo_nonce,
+        )?;
+
+        // Store outgoing transaction with full note data for sender recovery
+        let outgoing_str = serde_json::json!({
+            "commitment_index": "pending",
+            "note_commitment": hex::encode(output_commitment_bytes),
+            "fingerprint": hex::encode(&to_ivk_bytes), // IVK bytes as fingerprint
+            "encrypted_memo": hex::encode(&memo_ciphertext),
+            "ephemeral_public": hex::encode(tvk.ephemeral_public()),
+            "outgoing_ciphertext": hex::encode(&outgoing_ciphertext),
+            "amount_minor": amount_minor_u128,
+        })
+        .to_string();
+
+        let fee_str = format!("{} PRAF", prover_tip_amount);
+        db::insert_outgoing(
+            &db,
+            tx_id.clone(),
+            active_account_index,
+            amount_display.clone(),
+            fee_str,
+            params.memo.clone(),
+            "pending",
+            Some(vec![outgoing_str]),
+            None,
+        )?;
+    }
 
     let mut output_memos_json = Vec::new();
-    output_memos_json.push(serde_json::json!({
-        "note_commitment": hex::encode(output_commitment_bytes),
-        "fingerprint": hex::encode(&to_ivk_bytes), // IVK bytes as fingerprint
-        "memo": hex::encode(encrypted_memo),
-        "ephemeral_public": hex::encode(ephemeral_public), // For receiver ECDH decryption
-        "sender_fingerprint": hex::encode(sender_fvk.fingerprint()),
-        "outgoing_ciphertext": hex::encode(&outgoing_ciphertext),
-    }));
+    if !is_bridge_deposit {
+        let output_commitment_bytes = fr_to_bytes(&output_commitments[0]); // First output is recipient
+        let to_ivk_unwrapped = to_ivk.as_ref().ok_or("Missing recipient IVK")?;
+
+        let memo_text = params.memo.clone().unwrap_or_default();
+        let output_nonce = [0u8; 32]; // Get from output creation above
+        let memo_plaintext =
+            build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
+        let mut memo_nonce = [0u8; 12];
+        rng.fill_bytes(&mut memo_nonce);
+
+        // ECDH-based memo encryption using TransactionViewKey
+        // 1. Generate ephemeral secret for this transaction
+        let mut ephemeral_secret = [0u8; 32];
+        rng.fill_bytes(&mut ephemeral_secret);
+
+        // 2. Derive shared secret using sender's ephemeral key + recipient's IVK
+        let tvk = TransactionViewKey::derive_sender(&ephemeral_secret, to_ivk_unwrapped);
+        let ephemeral_public = tvk.ephemeral_public();
+
+        // 3. Encrypt memo with shared secret (instead of memo_key)
+        let encrypted_memo = encrypt_memo_v1(&memo_plaintext, tvk.shared_secret(), &memo_nonce)?;
+
+        // OVK: Build outgoing metadata for sender-side recovery
+        // Contains: recipient IVK (32 bytes) + amount (16 bytes) + memo text + \0 + tx_id + \0 + fee + \0 + recipient_address
+        let fee = format!("{:.4} PRAF", prover_tip_val);
+        let mut outgoing_plaintext = Vec::with_capacity(48 + memo_text.len() + 1 + tx_id.len());
+        outgoing_plaintext.extend_from_slice(&to_ivk_bytes); // 32 bytes: recipient IVK (used as fingerprint)
+        outgoing_plaintext.extend_from_slice(&amount_minor_u128.to_le_bytes()); // 16 bytes: amount
+        outgoing_plaintext.extend_from_slice(memo_text.as_bytes()); // variable: memo
+        outgoing_plaintext.push(0u8); // Separator
+        outgoing_plaintext.extend_from_slice(tx_id.as_bytes()); // variable: tx_id
+        outgoing_plaintext.push(0u8); // Separator
+        outgoing_plaintext.extend_from_slice(fee.as_bytes()); // variable: fee
+        outgoing_plaintext.push(0u8); // Separator
+        outgoing_plaintext.extend_from_slice(params.to.as_bytes()); // variable: recipient_address
+
+        // Encrypt with sender's OVK-derived key (using OVK as symmetric key like memo_key)
+        let mut outgoing_nonce = [0u8; 12];
+        rng.fill_bytes(&mut outgoing_nonce);
+        let outgoing_ciphertext = encrypt_memo_v1(
+            &outgoing_plaintext,
+            sender_fvk.outgoing().as_bytes(),
+            &outgoing_nonce,
+        )?;
+
+        output_memos_json.push(serde_json::json!({
+            "note_commitment": hex::encode(output_commitment_bytes),
+            "fingerprint": hex::encode(&to_ivk_bytes), // IVK bytes as fingerprint
+            "memo": hex::encode(encrypted_memo),
+            "ephemeral_public": hex::encode(ephemeral_public), // For receiver ECDH decryption
+            "sender_fingerprint": hex::encode(sender_fvk.fingerprint()),
+            "outgoing_ciphertext": hex::encode(&outgoing_ciphertext),
+        }));
+    }
 
     if let Some((change_note, change_commitment_bytes)) = &change_note_opt {
         let change_plaintext =
@@ -1537,67 +1621,74 @@ pub async fn send_transaction(
         .map(|n| hex::encode(fr_to_bytes(n)))
         .collect();
 
-    db::insert_outgoing(
-        &db,
-        tx_id.clone(),
-        active_account_index,
-        amount_display,
-        fee,
-        params.memo.clone(),
-        "pending",
-        Some(nullifier_hexs),
-        Some(&params.to), // Recipient SS58 address
-    )?;
+    // Insert outgoing transaction and poll for confirmation (skip for bridge deposits - already done above)
+    if !is_bridge_deposit {
+        let output_commitment_bytes = fr_to_bytes(&output_commitments[0]);
+        let fee_str = format!("{} PRAF", prover_tip_amount);
 
-    // Note: We don't mark notes as spent here. They will be marked as spent
-    // when the transaction is confirmed and scan_notes_impl detects the nullifiers on-chain.
+        db::insert_outgoing(
+            &db,
+            tx_id.clone(),
+            active_account_index,
+            amount_display.clone(),
+            fee_str,
+            params.memo.clone(),
+            "pending",
+            Some(nullifier_hexs),
+            Some(&params.to), // Recipient SS58 address
+        )?;
 
-    // Poll helper-service for tx_hash (commitment status polling)
-    // We poll the output commitment to get the L1 tx_hash
-    let output_commitment_hex = hex::encode(output_commitment_bytes);
-    let helper_url_base = db::get_helper_service_url(&db)?;
-    let helper_url = format!("{}/api/v1/helper", helper_url_base.trim_end_matches('/'));
+        // Note: We don't mark notes as spent here. They will be marked as spent
+        // when the transaction is confirmed and scan_notes_impl detects the nullifiers on-chain.
 
-    // Spawn async task to poll for tx_hash and update DB
-    let tx_id_clone = tx_id.clone();
-    let db_path_clone = db.db_path.clone();
-    tokio::spawn(async move {
-        let db_clone = DbState {
-            db_path: db_path_clone,
-        };
-        let http = reqwest::Client::new();
-        let max_attempts = 30; // Poll for up to 30 seconds
+        // Poll helper-service for tx_hash (commitment status polling)
+        // We poll the output commitment to get the L1 tx_hash
+        let output_commitment_hex = hex::encode(output_commitment_bytes);
+        let helper_url_base = db::get_helper_service_url(&db)?;
+        let helper_url = format!("{}/api/v1/helper", helper_url_base.trim_end_matches('/'));
 
-        for attempt in 1..=max_attempts {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-            let request = HelperRequest::GetCommitmentStatus {
-                commitment: output_commitment_hex.clone(),
+        // Spawn async task to poll for tx_hash and update DB
+        let tx_id_clone = tx_id.clone();
+        let db_path_clone = db.db_path.clone();
+        tokio::spawn(async move {
+            let db_clone = DbState {
+                db_path: db_path_clone,
             };
+            let http = reqwest::Client::new();
+            let max_attempts = 30; // Poll for up to 30 seconds
 
-            if let Ok(resp) = http.post(&helper_url).json(&request).send().await {
-                if let Ok(helper_resp) = resp.json::<HelperResponse>().await {
-                    if let HelperResponse::CommitmentStatusResult {
-                        tx_hash: Some(hash),
-                        ..
-                    } = helper_resp
-                    {
-                        eprintln!("✅ Got tx_hash after {} attempts: {}", attempt, hash);
-                        // Update transaction ID with L1 tx_hash
-                        if let Err(e) = db::update_outgoing_tx_hash(&db_clone, &tx_id_clone, &hash)
+            for attempt in 1..=max_attempts {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+                let request = HelperRequest::GetCommitmentStatus {
+                    commitment: output_commitment_hex.clone(),
+                };
+
+                if let Ok(resp) = http.post(&helper_url).json(&request).send().await {
+                    if let Ok(helper_resp) = resp.json::<HelperResponse>().await {
+                        if let HelperResponse::CommitmentStatusResult {
+                            tx_hash: Some(hash),
+                            ..
+                        } = helper_resp
                         {
-                            eprintln!("Failed to update tx_hash: {}", e);
+                            eprintln!("✅ Got tx_hash after {} attempts: {}", attempt, hash);
+                            // Update transaction ID with L1 tx_hash
+                            if let Err(e) =
+                                db::update_outgoing_tx_hash(&db_clone, &tx_id_clone, &hash)
+                            {
+                                eprintln!("Failed to update tx_hash: {}", e);
+                            }
+                            return;
                         }
-                        return;
                     }
                 }
             }
-        }
-        eprintln!(
-            "⚠️  Tx hash polling timeout after {} attempts for tx {}",
-            max_attempts, tx_id_clone
-        );
-    });
+            eprintln!(
+                "⚠️  Tx hash polling timeout after {} attempts for tx {}",
+                max_attempts, tx_id_clone
+            );
+        });
+    }
 
     Ok(SendResult { tx_id })
 }

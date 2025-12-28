@@ -8,7 +8,7 @@
 
 use ethers::prelude::*;
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{Address, TransactionRequest, U256};
+use ethers::types::{Address, TransactionRequest, H256, U256};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -231,6 +231,37 @@ impl L2Client {
             .map_err(|e| format!("Failed to burn wPRAF: {}", e))?;
 
         Ok(format!("{:?}", pending_tx.tx_hash()))
+    }
+
+    /// Get transaction status from L2
+    pub async fn get_transaction_status(&self, tx_hash: &str) -> Result<String, String> {
+        // Parse transaction hash
+        let hash_str = tx_hash.trim_start_matches("0x");
+        let tx_hash_parsed: H256 = hash_str
+            .parse()
+            .map_err(|e| format!("Invalid transaction hash: {}", e))?;
+
+        // Query for transaction receipt
+        match self.provider.get_transaction_receipt(tx_hash_parsed).await {
+            Ok(Some(receipt)) => {
+                // Check if transaction was successful
+                if let Some(status) = receipt.status {
+                    if status.as_u64() == 1 {
+                        Ok("confirmed".to_string())
+                    } else {
+                        Ok("failed".to_string())
+                    }
+                } else {
+                    // Pre-Byzantium fork transactions don't have status field
+                    Ok("confirmed".to_string())
+                }
+            }
+            Ok(None) => {
+                // No receipt yet - transaction is still pending
+                Ok("pending".to_string())
+            }
+            Err(e) => Err(format!("Failed to get transaction status: {}", e)),
+        }
     }
 
     /// Get the configured L2 config

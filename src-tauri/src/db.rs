@@ -602,6 +602,17 @@ pub fn confirm_transaction_by_id(db: &DbState, tx_id: &str) -> Result<(), String
     Ok(())
 }
 
+/// Update transaction status by ID
+pub fn update_transaction_status(db: &DbState, tx_id: &str, status: &str) -> Result<(), String> {
+    let conn = open_db(db)?;
+    conn.execute(
+        "UPDATE transactions SET status=?1 WHERE id=?2",
+        params![status, tx_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Reconstruct outgoing transactions from spent notes after a full rescan.
 /// Since outgoing transaction details (recipient, memo) are not recoverable from chain,
 /// this creates synthetic transaction records based on spent note amounts minus change.
