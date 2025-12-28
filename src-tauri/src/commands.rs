@@ -2,8 +2,9 @@ use crate::db;
 use crate::db::DbState;
 use crate::types::{
     AccountInfo, AccountsState, AddressResult, AppInfo, Balance, BridgeDepositParams,
-    BridgeDepositResult, MintDevFaucetParams, MintDevFaucetResult, ScanNotesParams, SendParams,
-    SendResult, Settings, SyncMetadata, SyncState, TxSummary, WalletCreateResult, WalletStatus,
+    BridgeDepositResult, MintDevFaucetParams, MintDevFaucetResult, ProverTip, ScanNotesParams,
+    SendParams, SendResult, Settings, SyncMetadata, SyncState, TxSummary, WalletCreateResult,
+    WalletStatus,
 };
 use crate::wallet::WalletState;
 use serde::{Deserialize, Serialize};
@@ -12,22 +13,46 @@ use tauri::Manager;
 fn resolve_keys_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
     use std::path::PathBuf;
 
+    // PRIORITY 1: Check for src-tauri/resources/keys in development mode
+    // In dev mode, resolve relative to the workspace root
+    if let Ok(cwd) = std::env::current_dir() {
+        // Try src-tauri/resources/keys relative to current directory
+        let dev_keys = cwd.join("src-tauri/resources/keys");
+        if dev_keys.is_dir() {
+            eprintln!("[resolve_keys_dir] Using dev keys: {}", dev_keys.display());
+            return Ok(dev_keys);
+        }
+        // Also try if we're already in src-tauri directory
+        let dev_keys_alt = cwd.join("resources/keys");
+        if dev_keys_alt.is_dir() {
+            eprintln!(
+                "[resolve_keys_dir] Using dev keys (alt): {}",
+                dev_keys_alt.display()
+            );
+            return Ok(dev_keys_alt);
+        }
+    }
+
+    // PRIORITY 2: Environment variables (for e2e tests and explicit configuration)
     if let Ok(v) = std::env::var("PRAPH_CLIENT_KEYS_DIR") {
         if !v.trim().is_empty() {
+            eprintln!("[resolve_keys_dir] Using PRAPH_CLIENT_KEYS_DIR: {}", v);
             return Ok(PathBuf::from(v));
         }
     }
     if let Ok(v) = std::env::var("PRAPH_KEYS_DIR") {
         if !v.trim().is_empty() {
+            eprintln!("[resolve_keys_dir] Using PRAPH_KEYS_DIR: {}", v);
             return Ok(PathBuf::from(v));
         }
     }
 
-    // Prefer bundled resources/keys when available.
+    // PRIORITY 3: Bundled resources (production mode)
     if let Some(app) = app {
         use tauri::path::BaseDirectory;
         if let Ok(p) = app.path().resolve("keys", BaseDirectory::Resource) {
             if p.is_dir() {
+                eprintln!("[resolve_keys_dir] Using bundled keys: {}", p.display());
                 return Ok(p);
             }
         }
@@ -36,24 +61,31 @@ fn resolve_keys_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf
             .resolve("resources/keys", BaseDirectory::Resource)
         {
             if p.is_dir() {
+                eprintln!(
+                    "[resolve_keys_dir] Using bundled resources/keys: {}",
+                    p.display()
+                );
                 return Ok(p);
             }
         }
     }
 
-    // Fallbacks: current working directory ./keys, or sibling PRAPH repo ../PRAPH/keys.
+    // PRIORITY 4: Fallback to ./keys or sibling PRAPH repo
     let cwd_keys = PathBuf::from("./keys");
     if cwd_keys.is_dir() {
+        eprintln!("[resolve_keys_dir] Using fallback ./keys");
         return Ok(cwd_keys);
     }
 
     if let Ok(cwd) = std::env::current_dir() {
         let sibling = cwd.join("../PRAPH/keys");
         if sibling.is_dir() {
+            eprintln!("[resolve_keys_dir] Using fallback sibling ../PRAPH/keys");
             return Ok(sibling);
         }
     }
 
+    eprintln!("[resolve_keys_dir] WARNING: No keys directory found, returning ./keys");
     Ok(PathBuf::from("./keys"))
 }
 
@@ -243,7 +275,79 @@ fn build_v1_plaintext(note_nonce: &[u8; 32], amount: u128, metadata: &[u8]) -> V
     out
 }
 
+/// Query state roots directly from L1 node RPC to avoid helper service sync lag.
+/// Returns (commitment_root, null ifier_root) as byte arrays.
+async fn get_state_roots_from_node(rpc_url: &str) -> Result<([u8; 32], [u8; 32]), String> {
+    let client = reqwest::Client::new();
+
+    // Get commitment root
+    let commitment_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "praph_zk_getCommitmentRoot",
+        "params": []
+    });
+
+    let commitment_resp = client
+        .post(rpc_url)
+        .json(&commitment_req)
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {}", e))?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("RPC response parse failed: {}", e))?;
+
+    let commitment_root_hex = commitment_resp
+        .get("result")
+        .and_then(|r| r.get("commitment_root"))
+        .and_then(|v| v.as_str())
+        .ok_or("missing commitment_root in response")?;
+
+    // Get nullifier root
+    let nullifier_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "2",
+        "method": "praph_zk_getNullifierRoot",
+        "params": []
+    });
+
+    let nullifier_resp = client
+        .post(rpc_url)
+        .json(&nullifier_req)
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {}", e))?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("RPC response parse failed: {}", e))?;
+
+    let nullifier_root_hex = nullifier_resp
+        .get("result")
+        .and_then(|r| r.get("nullifier_root"))
+        .and_then(|v| v.as_str())
+        .ok_or("missing nullifier_root in response")?;
+
+    // Parse hex to bytes
+    let c_bytes = hex::decode(commitment_root_hex.trim_start_matches("0x"))
+        .map_err(|e| format!("invalid commitment root hex: {}", e))?;
+    let n_bytes = hex::decode(nullifier_root_hex.trim_start_matches("0x"))
+        .map_err(|e| format!("invalid nullifier root hex: {}", e))?;
+
+    if c_bytes.len() != 32 || n_bytes.len() != 32 {
+        return Err("state roots must be 32 bytes".to_string());
+    }
+
+    let mut c_arr = [0u8; 32];
+    c_arr.copy_from_slice(&c_bytes);
+    let mut n_arr = [0u8; 32];
+    n_arr.copy_from_slice(&n_bytes);
+
+    Ok((c_arr, n_arr))
+}
+
 #[tauri::command]
+
 pub async fn get_balance(
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
@@ -344,6 +448,7 @@ struct EncryptedNoteResponse {
     pub fingerprint: String,
     pub tx_hash: Option<String>,
     pub sender_fingerprint: Option<String>,
+    pub ephemeral_public: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,6 +456,7 @@ struct OutgoingNoteResponse {
     pub commitment: String,
     pub commitment_index: u64,
     pub outgoing_ciphertext: Option<String>,
+    pub tx_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,12 +533,54 @@ fn parse_v1_plaintext(plaintext: &[u8]) -> Result<([u8; 32], u128, Vec<u8>), Str
     Ok((note_nonce, amount, metadata))
 }
 
+fn parse_outgoing_metadata(
+    plaintext: &[u8],
+) -> Result<
+    (
+        [u8; 32],
+        u128,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ),
+    String,
+> {
+    if plaintext.len() < 48 {
+        return Err("outgoing metadata too short".to_string());
+    }
+    let mut recipient_fingerprint = [0u8; 32];
+    recipient_fingerprint.copy_from_slice(&plaintext[0..32]);
+    let mut amount_bytes = [0u8; 16];
+    amount_bytes.copy_from_slice(&plaintext[32..48]);
+    let amount = u128::from_le_bytes(amount_bytes);
+
+    let remaining = &plaintext[48..];
+    // Split by null byte 0u8
+    let parts: Vec<&[u8]> = remaining.split(|b| *b == 0).collect();
+
+    let memo = String::from_utf8(parts.get(0).unwrap_or(&&[][..]).to_vec()).unwrap_or_default();
+    let tx_id = String::from_utf8(parts.get(1).unwrap_or(&&[][..]).to_vec()).unwrap_or_default();
+
+    // New optional fields
+    let fee = parts
+        .get(2)
+        .map(|b| String::from_utf8(b.to_vec()).unwrap_or_default())
+        .filter(|s| !s.is_empty());
+    let recipient = parts
+        .get(3)
+        .map(|b| String::from_utf8(b.to_vec()).unwrap_or_default())
+        .filter(|s| !s.is_empty());
+
+    Ok((recipient_fingerprint, amount, memo, tx_id, fee, recipient))
+}
+
 async fn scan_notes_impl(
     wallet: &WalletState,
     db: &DbState,
     params: ScanNotesParams,
 ) -> Result<SyncMetadata, String> {
-    use praph_circuits::hash::{fr_from_bytes, fr_from_u64, fr_to_bytes};
+    use praph_circuits::hash::{fr_from_u64, fr_to_bytes};
     use praph_circuits::keys::IncomingViewingKey;
     use praph_circuits::keys::SpendingKey;
     use praph_circuits::note::Note;
@@ -453,6 +601,9 @@ async fn scan_notes_impl(
     let fvk = spending_key.derive_full_viewing_key();
     let fingerprint_hex = hex::encode(fvk.fingerprint());
     let memo_key = *fvk.memo_key().as_bytes();
+
+    eprintln!("[scan_notes_impl] Using fingerprint: {}", fingerprint_hex);
+    eprintln!("[scan_notes_impl] Account index: {}", active_account_index);
 
     if params.full_rescan {
         // Chain purge or user requested full rescan: clear stale local history so old outgoing txs
@@ -484,20 +635,79 @@ async fn scan_notes_impl(
     let now = crate::unix_ts();
 
     for note in notes {
+        eprintln!(
+            "[scan_notes_impl] Processing note: commitment={} index={}",
+            note.commitment, note.commitment_index
+        );
+
         let enc_hex = match note.encrypted_memo {
             Some(h) => h,
-            None => continue,
+            None => {
+                eprintln!("[scan_notes_impl] Skipping: no encrypted_memo");
+                continue;
+            }
         };
         let enc_bytes = hex::decode(enc_hex.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-        let plaintext = match decrypt_memo_v1(&enc_bytes, &memo_key) {
-            Ok(p) => p,
-            Err(_) => continue,
+        // Try to decrypt memo with TVK (priority) or legacy FVK key
+        let plaintext_result = if let Some(ref ephem_hex) = note.ephemeral_public {
+            eprintln!(
+                "[scan_notes_impl] Attempting TVK decryption with ephemeral_public={}",
+                ephem_hex
+            );
+            if let Ok(ephem_bytes) = hex::decode(ephem_hex.trim_start_matches("0x")) {
+                if let Ok(ephem_array) = ephem_bytes.try_into() {
+                    use praph_circuits::keys::TransactionViewKey;
+
+                    // Use wallet's FVK to derive IVK
+                    let my_ivk = fvk.incoming();
+                    let ivk_secret_bytes = my_ivk.as_bytes(); // Returns &[u8; 32] (IVK secret)
+
+                    let tvk = TransactionViewKey::derive_receiver(&ephem_array, ivk_secret_bytes);
+                    let shared_secret = tvk.shared_secret();
+
+                    decrypt_memo_v1(&enc_bytes, &shared_secret)
+                } else {
+                    Err("Invalid ephemeral key length".to_string())
+                }
+            } else {
+                Err("Invalid ephemeral key hex".to_string())
+            }
+        } else {
+            eprintln!("[scan_notes_impl] Attempting legacy FVK memo_key decryption");
+            // Legacy fallback: decrypt with FVK-derived memo_key
+            decrypt_memo_v1(&enc_bytes, &memo_key)
+        };
+
+        let plaintext = match plaintext_result {
+            Ok(p) => {
+                eprintln!(
+                    "[scan_notes_impl] Decryption SUCCESS, plaintext_len={}",
+                    p.len()
+                );
+                p
+            }
+            Err(e) => {
+                eprintln!("[scan_notes_impl] Decryption FAILED: {}", e);
+                continue;
+            }
         };
         let (note_nonce, amount, metadata) = match parse_v1_plaintext(&plaintext) {
-            Ok(v) => v,
-            Err(_) => continue,
+            Ok(v) => {
+                eprintln!(
+                    "[scan_notes_impl] Parsed: nonce_len={} amount={} metadata_len={}",
+                    v.0.len(),
+                    v.1,
+                    v.2.len()
+                );
+                v
+            }
+            Err(e) => {
+                eprintln!("[scan_notes_impl] parse_v1_plaintext FAILED: {}", e);
+                continue;
+            }
         };
         if amount == 0 {
+            eprintln!("[scan_notes_impl] Skipping: amount is 0");
             continue;
         }
 
@@ -554,6 +764,96 @@ async fn scan_notes_impl(
                 .map(|m| m.max(note.commitment_index))
                 .unwrap_or(note.commitment_index),
         );
+    }
+
+    // OVK Scanning: Recover outgoing transactions
+    // Only perform if we have the client available (already established)
+    {
+        // OutgoingViewingKey is already available from fvk.outgoing()
+        let sender_ovk = fvk.outgoing();
+        // FIXED: Query using IVK fingerprint (stored in DB) instead of OVK bytes
+        let sender_fp_hex = hex::encode(fvk.fingerprint());
+
+        let req_out = HelperRequest::GetOutgoingMemosBySenderFingerprint {
+            sender_fingerprint: sender_fp_hex,
+        };
+
+        if let Ok(resp) = client.post(&url).json(&req_out).send().await {
+            if let Ok(HelperResponse::GetOutgoingMemosBySenderFingerprintResult { notes }) =
+                resp.json().await
+            {
+                for note in notes {
+                    let enc_hex = match note.outgoing_ciphertext {
+                        Some(h) => h,
+                        None => continue,
+                    };
+                    let enc_bytes = match hex::decode(enc_hex.trim_start_matches("0x")) {
+                        Ok(b) => b,
+                        Err(_) => continue,
+                    };
+
+                    // Decrypt with outgoing key
+                    let plaintext = match decrypt_memo_v1(&enc_bytes, sender_ovk.as_bytes()) {
+                        Ok(p) => {
+                            eprintln!(
+                                "[OVK] decrypt success: plaintext_len={} first_bytes={:02x?}",
+                                p.len(),
+                                &p[..p.len().min(64)]
+                            );
+                            p
+                        }
+                        Err(e) => {
+                            eprintln!("[OVK] decrypt failed: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let (_, amount, memo, tx_id, fee_opt, recipient_opt) =
+                        match parse_outgoing_metadata(&plaintext) {
+                            Ok(v) => {
+                                eprintln!(
+                                    "[OVK] parse success: amount={} memo={:?} tx_id={:?} fee={:?} recipient={:?}",
+                                    v.1, v.2, v.3, v.4, v.5
+                                );
+                                v
+                            }
+                            Err(e) => {
+                                eprintln!("[OVK] parse failed: {}", e);
+                                continue;
+                            }
+                        };
+
+                    let tx_id_final = if let Some(hash) = note.tx_hash {
+                        eprintln!("[OVK] Using L1 tx_hash from helper: {}", hash);
+                        hash // Use real L1 hash if available
+                    } else {
+                        eprintln!("[OVK] No L1 tx_hash, using parsed tx_id: {}", tx_id);
+                        // If no hash from helper (old schema?), stick with UUID
+                        tx_id
+                    };
+
+                    let amount_abs = amount;
+                    let amount_str =
+                        format!("{}.{:04} PRAF", amount_abs / 10000, amount_abs % 10000);
+                    let fee_str = fee_opt.unwrap_or_else(|| "0.0000 PRAF".to_string());
+
+                    // Insert as confirmed
+                    // We use the tx_id_final (hash) as the DB ID if possible.
+                    // This resolves "tx_id~" display issue if the UI shows the ID.
+                    let _ = db::insert_outgoing(
+                        db,
+                        tx_id_final,
+                        active_account_index,
+                        amount_str,
+                        fee_str,
+                        Some(memo),
+                        "confirmed",
+                        None,
+                        recipient_opt.as_deref(),
+                    );
+                }
+            }
+        }
     }
 
     // Check pending transactions and confirm if their nullifiers are on-chain
@@ -628,90 +928,8 @@ async fn scan_notes_impl(
     if params.full_rescan {
         // v0 behavior kept for compatibility: confirm any locally pending outgoing txs.
         let _ = db::confirm_pending(db);
-
-        // OVK-based outgoing transaction recovery
-        // Fetch outgoing memos by sender fingerprint and decrypt with OVK
-        let ovk_key = *fvk.outgoing().as_bytes();
-        let req = HelperRequest::GetOutgoingMemosBySenderFingerprint {
-            sender_fingerprint: fingerprint_hex.clone(),
-        };
-        if let Ok(resp) = client.post(&url).json(&req).send().await {
-            if let Ok(resp) = resp.json::<HelperResponse>().await {
-                if let HelperResponse::GetOutgoingMemosBySenderFingerprintResult { notes } = resp {
-                    for note in notes {
-                        if let Some(ciphertext_hex) = note.outgoing_ciphertext {
-                            let enc_bytes =
-                                match hex::decode(ciphertext_hex.trim_start_matches("0x")) {
-                                    Ok(b) => b,
-                                    Err(_) => continue,
-                                };
-                            // Decrypt using OVK (same as memo_key encryption)
-                            if let Ok(plaintext) = decrypt_memo_v1(&enc_bytes, &ovk_key) {
-                                // Parse outgoing plaintext: recipient_fp (32) + amount (16) + memo
-                                if plaintext.len() >= 48 {
-                                    let mut recipient_fp = [0u8; 32];
-                                    recipient_fp.copy_from_slice(&plaintext[0..32]);
-                                    let mut amount_bytes = [0u8; 16];
-                                    amount_bytes.copy_from_slice(&plaintext[32..48]);
-                                    let amount = u128::from_le_bytes(amount_bytes);
-                                    // Helper function to split memo and text
-                                    // Format: memo + \0 + tx_id OR just memo (legacy)
-                                    let memo_bytes = &plaintext[48..];
-                                    let memo_full = String::from_utf8_lossy(memo_bytes).to_string();
-
-                                    // Try to split by null byte
-                                    let (memo_text, minter_tx_id) = if let Some(idx) =
-                                        memo_bytes.iter().position(|&b| b == 0)
-                                    {
-                                        let memo_part =
-                                            String::from_utf8_lossy(&memo_bytes[..idx]).to_string();
-                                        // tx_id starts after the null byte
-                                        let tx_id_part =
-                                            String::from_utf8_lossy(&memo_bytes[idx + 1..])
-                                                .to_string();
-                                        (memo_part, Some(tx_id_part))
-                                    } else {
-                                        (memo_full, None)
-                                    };
-
-                                    // Create synthetic outgoing transaction
-                                    // Use recovered tx_id if available, otherwise generate one
-                                    let tx_id = minter_tx_id.unwrap_or_else(|| {
-                                        format!("ovk_recovered_{}", note.commitment_index)
-                                    });
-
-                                    let memo_opt = if memo_text.is_empty() {
-                                        None
-                                    } else {
-                                        Some(memo_text)
-                                    };
-
-                                    let amount_minor = if amount > i64::MAX as u128 {
-                                        i64::MAX
-                                    } else {
-                                        amount as i64
-                                    };
-                                    let amount_display = db::format_amount_minor(amount_minor);
-
-                                    // Use insert_outgoing (will fail silently if duplicate)
-                                    let _ = db::insert_outgoing(
-                                        db,
-                                        tx_id.clone(),
-                                        active_account_index,
-                                        amount_display,
-                                        "0".to_string(),
-                                        memo_opt,
-                                        "confirmed",
-                                        None,
-                                        None, // No recipient for recovered outgoing
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Note: OVK-based outgoing transaction recovery is already performed above (non-conditional)
+        // with proper parse_outgoing_metadata handling of fee and recipient fields.
     }
 
     Ok(done)
@@ -742,11 +960,12 @@ pub async fn send_transaction(
     use praph_circuits::halo2::enabled::{
         create_client_action_proof, load_output_keys, load_spend_keys, ClientActionCircuit,
     };
-    use praph_circuits::hash::{fr_from_bytes, fr_to_bytes, poseidon_hash};
+    use praph_circuits::hash::{fr_from_bytes, fr_to_bytes};
     use praph_circuits::inputs::{
         ClientPrivateInputs, ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES,
     };
-    use praph_circuits::keys::SpendingKey;
+    use praph_circuits::keys::{IncomingViewingKey, SpendingKey, TransactionViewKey};
+
     use praph_circuits::merkle::MerklePath;
     use praph_circuits::note::Note;
     use rand::RngCore;
@@ -754,8 +973,11 @@ pub async fn send_transaction(
     use rand_chacha::ChaCha20Rng;
 
     let tx_id = db::random_id("tx");
+    let http = reqwest::Client::new(); // Added http client
 
     let active_account_index = db::get_active_account_index(&db)?;
+    let helper = db::get_helper_service_url(&db)?;
+    let helper_url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
 
     let amount_display = if params.amount.contains(' ') {
         params.amount.clone()
@@ -768,69 +990,83 @@ pub async fn send_transaction(
     }
     let amount_minor_u128 = amount_minor_i64 as u128;
 
-    let fee = "0.0100 PRAF".to_string();
-
     let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
     let sender_sk = SpendingKey::from_bytes(spending_key_bytes);
     let sender_fvk = sender_sk.derive_full_viewing_key();
 
-    let to_bytes = parse_recipient_32(&params.to)?;
-    let to_sk = SpendingKey::from_bytes(to_bytes);
-    let to_fvk = to_sk.derive_full_viewing_key();
+    // Parse recipient address as IVK bytes (address = SS58(IVK))
+    // This is the correct approach for Option 2: sender only needs recipient's IVK
+    let to_ivk_bytes = parse_recipient_32(&params.to)?;
+    let to_ivk = IncomingViewingKey::from_bytes(to_ivk_bytes);
 
     let sender_fingerprint = hex::encode(sender_fvk.fingerprint());
+
+    // Parse prover tip amount (raw minor units string)
+    let prover_tip_amount: u128 = params.prover_tip.parse().unwrap_or(0);
+    let prover_tip_i64 = prover_tip_amount as i64;
+
+    // Fetch prover address from prover service
+    let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:9093".to_string());
+    let prover_address_result: Result<String, String> = async {
+        let resp = http
+            .get(format!("{}/address", prover_url.trim_end_matches('/')))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch prover address: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("Prover returned status {}", resp.status()));
+        }
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        json.get("address")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Missing address in prover response".to_string())
+    }
+    .await;
+
+    // ProverTip is mandatory (Low/Medium/High), so we require the prover address.
+    // If we can't get it, we must fail rather than silently skipping the tip.
+    let prover_address_opt = Some(prover_address_result.map_err(|e| {
+        format!(
+            "Failed to fetch prover address (required for tip): {}. URL: {}",
+            e, prover_url
+        )
+    })?);
+
     let spendable = db::list_spendable_notes(&db, &sender_fingerprint)?;
     let mut selected = Vec::new();
     let mut total_selected: i64 = 0;
+    // We must select enough for Amount + Tip
+    let target_amount = amount_minor_i64 + prover_tip_i64;
+
     for n in spendable {
-        if total_selected >= amount_minor_i64 {
+        if total_selected >= target_amount {
             break;
         }
         selected.push(n);
         total_selected = total_selected.saturating_add(selected.last().unwrap().amount_minor);
     }
-    if total_selected < amount_minor_i64 {
-        return Err("insufficient balance".to_string());
+    if total_selected < target_amount {
+        return Err(format!(
+            "insufficient balance: have {}, need {} (amount {} + tip {})",
+            total_selected, target_amount, amount_minor_i64, prover_tip_i64
+        ));
     }
-    let change_amount_minor: i64 = total_selected - amount_minor_i64;
+
+    // Calculate actual change amount early (needed for OutputAction creation)
+    // total_selected - amount - tip
+    let change_amount_minor: i64 = total_selected - amount_minor_i64 - prover_tip_i64;
     let change_amount_u128: u128 = if change_amount_minor <= 0 {
         0
     } else {
         change_amount_minor as u128
     };
 
-    let helper = db::get_helper_service_url(&db)?;
-    let helper_url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
-    let http = reqwest::Client::new();
+    // Get state roots directly from L1 node (not helper) to avoid sync lag
+    let rpc_url = db::get_node_rpc_url(&db)?;
+    let (commitment_root_bytes, nullifier_root_bytes) = get_state_roots_from_node(&rpc_url).await?;
 
-    let roots_resp = http
-        .post(&helper_url)
-        .json(&HelperRequest::GetStateRoots)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let roots_resp: HelperResponse = roots_resp.json().await.map_err(|e| e.to_string())?;
-    let (commitment_root_bytes, nullifier_root_bytes) = match roots_resp {
-        HelperResponse::StateRootsResult {
-            commitment_root,
-            nullifier_root,
-        } => {
-            let c =
-                hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-            let n =
-                hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-            if c.len() != 32 || n.len() != 32 {
-                return Err("invalid state roots".to_string());
-            }
-            let mut c_arr = [0u8; 32];
-            c_arr.copy_from_slice(&c);
-            let mut n_arr = [0u8; 32];
-            n_arr.copy_from_slice(&n);
-            (c_arr, n_arr)
-        }
-        HelperResponse::Error { message } => return Err(message),
-        _ => return Err("unexpected helper response".to_string()),
-    };
     let commitment_root_fr = fr_from_bytes(&commitment_root_bytes);
     let nullifier_root_fr = fr_from_bytes(&nullifier_root_bytes);
 
@@ -876,7 +1112,7 @@ pub async fn send_transaction(
         Ok(MerklePath::new(siblings_fr, path.direction_bits))
     }
 
-    let sender_recipient_commitment = fr_from_bytes(&spending_key_bytes);
+    let sender_recipient_commitment = fr_from_bytes(sender_fvk.incoming().as_bytes());
     let mut spend_actions = Vec::with_capacity(selected.len());
     let mut spend_nullifiers = Vec::with_capacity(selected.len());
     for (n, w) in selected.iter().zip(witnesses.into_iter()) {
@@ -914,17 +1150,18 @@ pub async fn send_transaction(
     let mut output_nonce = [0u8; 32];
     rng.fill_bytes(&mut output_nonce);
 
-    let recipient_commitment = fr_from_bytes(&to_bytes);
-    let output_note = Note::new(
-        to_sk,
-        to_fvk.incoming().clone(),
+    // Use IVK bytes for recipient commitment calculation (Option 2)
+    let recipient_commitment = fr_from_bytes(&to_ivk_bytes);
+    // Use new_for_recipient - sender doesn't know recipient's SK
+    let output_note = Note::new_for_recipient(
+        to_ivk.clone(),
         amount_minor_u128,
         recipient_commitment,
         output_nonce,
     );
     let output_commitment = output_note.commitment();
     let output_commitment_bytes = fr_to_bytes(&output_commitment);
-    let output_commitment_hex = hex::encode(output_commitment_bytes);
+    let _output_commitment_hex = hex::encode(output_commitment_bytes);
 
     let mut output_actions = vec![OutputAction {
         note: output_note.clone(),
@@ -933,14 +1170,17 @@ pub async fn send_transaction(
 
     let mut output_commitments = vec![output_commitment];
 
+    // Calculate actual change amount (minus prover tip if prover address available)
+    let actual_change_amount = change_amount_u128;
+
     let mut change_note_opt: Option<(Note, [u8; 32])> = None;
-    if change_amount_u128 > 0 {
+    if actual_change_amount > 0 {
         let mut change_nonce = [0u8; 32];
         rng.fill_bytes(&mut change_nonce);
         let change_note = Note::new(
             sender_sk,
             sender_fvk.incoming().clone(),
-            change_amount_u128,
+            actual_change_amount,
             sender_recipient_commitment,
             change_nonce,
         );
@@ -952,6 +1192,38 @@ pub async fn send_transaction(
         });
         output_commitments.push(change_commitment);
         change_note_opt = Some((change_note, change_commitment_bytes));
+    }
+
+    // Add prover tip Output Action (3rd output - encrypted to prover's address)
+    let mut _prover_tip_note_opt: Option<(Note, [u8; 32])> = None;
+    if let Some(ref prover_address) = prover_address_opt {
+        if prover_tip_amount > 0 {
+            // Parse prover's SS58 address to get the public key bytes
+            // We need to create a SpendingKey from the prover's public key
+            // For now, we use the address string directly as the recipient commitment
+            let prover_bytes = parse_recipient_32(prover_address)?;
+            let prover_sk = SpendingKey::from_bytes(prover_bytes);
+            let prover_fvk = prover_sk.derive_full_viewing_key();
+            let prover_recipient_commitment = fr_from_bytes(&prover_bytes);
+
+            let mut tip_nonce = [0u8; 32];
+            rng.fill_bytes(&mut tip_nonce);
+            let tip_note = Note::new(
+                prover_sk,
+                prover_fvk.incoming().clone(),
+                prover_tip_amount,
+                prover_recipient_commitment,
+                tip_nonce,
+            );
+            let tip_commitment = tip_note.commitment();
+            let tip_commitment_bytes = fr_to_bytes(&tip_commitment);
+            output_actions.push(OutputAction {
+                note: tip_note.clone(),
+                enabled: true,
+            });
+            output_commitments.push(tip_commitment);
+            _prover_tip_note_opt = Some((tip_note, tip_commitment_bytes));
+        }
     }
 
     let encrypted_l2_message = vec![0xFFu8; MAX_ENCRYPTED_MESSAGE_BYTES];
@@ -966,6 +1238,18 @@ pub async fn send_transaction(
     };
     public_inputs.pad_in_place();
 
+    // change_amount_u128 already calculated above
+    // Fee = (max(N_Spend, N_Output) * L1_base_fee) + prover_tip
+    let l1_base_fee_per_action = 0.0001_f64; // PRAF per action
+                                             // Prover tip value in PRAF (for display/logging fees)
+    let prover_tip_val = (prover_tip_amount as f64) / 10000.0;
+
+    let spend_count = spend_actions.iter().filter(|sa| sa.enabled).count() as f64;
+    let output_count = output_actions.iter().filter(|oa| oa.enabled).count() as f64;
+    let action_count = spend_count.max(output_count);
+    let total_fee_praf = (action_count * l1_base_fee_per_action) + prover_tip_val;
+    let total_fee_minor = (total_fee_praf * 10_000.0) as u128; // Convert to minor units (u128 for tx_fee)
+
     let private_inputs = ClientPrivateInputs {
         spend_actions,
         output_actions,
@@ -973,7 +1257,7 @@ pub async fn send_transaction(
             encrypted_message: encrypted_l2_message.clone(),
             deposit_value: 0,
         },
-        tx_fee: 0,
+        tx_fee: 0, // Public fee is 0 (User pays Tip via ZK Output)
     };
 
     let keys_dir = resolve_keys_dir(Some(&app))?;
@@ -1125,17 +1409,34 @@ pub async fn send_transaction(
     let memo_plaintext = build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
     let mut memo_nonce = [0u8; 12];
     rng.fill_bytes(&mut memo_nonce);
-    let encrypted_memo =
-        encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
+
+    // ECDH-based memo encryption using TransactionViewKey
+    // 1. Generate ephemeral secret for this transaction
+    let mut ephemeral_secret = [0u8; 32];
+    rng.fill_bytes(&mut ephemeral_secret);
+
+    // 2. Derive shared secret using sender's ephemeral key + recipient's IVK
+    let tvk = TransactionViewKey::derive_sender(&ephemeral_secret, &to_ivk);
+    let ephemeral_public = tvk.ephemeral_public();
+
+    // 3. Encrypt memo with shared secret (instead of memo_key)
+    let encrypted_memo = encrypt_memo_v1(&memo_plaintext, tvk.shared_secret(), &memo_nonce)?;
+
+    // Use only prover tip as the user-facing fee (network fees are subsidized/handled by prover)
+    let fee = format!("{:.4} PRAF", prover_tip_val);
 
     // OVK: Build outgoing metadata for sender-side recovery
-    // Contains: recipient fingerprint (32 bytes) + amount (16 bytes) + memo text + \0 + tx_id
+    // Contains: recipient IVK (32 bytes) + amount (16 bytes) + memo text + \0 + tx_id + \0 + fee + \0 + recipient_address
     let mut outgoing_plaintext = Vec::with_capacity(48 + memo_text.len() + 1 + tx_id.len());
-    outgoing_plaintext.extend_from_slice(to_fvk.fingerprint()); // 32 bytes: recipient fingerprint
+    outgoing_plaintext.extend_from_slice(&to_ivk_bytes); // 32 bytes: recipient IVK (used as fingerprint)
     outgoing_plaintext.extend_from_slice(&amount_minor_u128.to_le_bytes()); // 16 bytes: amount
     outgoing_plaintext.extend_from_slice(memo_text.as_bytes()); // variable: memo
     outgoing_plaintext.push(0u8); // Separator
     outgoing_plaintext.extend_from_slice(tx_id.as_bytes()); // variable: tx_id
+    outgoing_plaintext.push(0u8); // Separator
+    outgoing_plaintext.extend_from_slice(fee.as_bytes()); // variable: fee
+    outgoing_plaintext.push(0u8); // Separator
+    outgoing_plaintext.extend_from_slice(params.to.as_bytes()); // variable: recipient_address
 
     // Encrypt with sender's OVK-derived key (using OVK as symmetric key like memo_key)
     let mut outgoing_nonce = [0u8; 12];
@@ -1149,15 +1450,16 @@ pub async fn send_transaction(
     let mut output_memos_json = Vec::new();
     output_memos_json.push(serde_json::json!({
         "note_commitment": hex::encode(output_commitment_bytes),
-        "fingerprint": hex::encode(to_fvk.fingerprint()),
+        "fingerprint": hex::encode(&to_ivk_bytes), // IVK bytes as fingerprint
         "memo": hex::encode(encrypted_memo),
+        "ephemeral_public": hex::encode(ephemeral_public), // For receiver ECDH decryption
         "sender_fingerprint": hex::encode(sender_fvk.fingerprint()),
         "outgoing_ciphertext": hex::encode(&outgoing_ciphertext),
     }));
 
     if let Some((change_note, change_commitment_bytes)) = &change_note_opt {
         let change_plaintext =
-            build_v1_plaintext(&change_note.nonce, change_amount_u128, b"change");
+            build_v1_plaintext(&change_note.nonce, change_note.amount, b"change");
         let mut change_nonce = [0u8; 12];
         rng.fill_bytes(&mut change_nonce);
         let encrypted_change = encrypt_memo_v1(
@@ -1172,11 +1474,37 @@ pub async fn send_transaction(
         }));
     }
 
-    let prover_tip = match params.prover_tip {
-        crate::types::ProverTip::Low => 0u128,
-        crate::types::ProverTip::Medium => 1u128,
-        crate::types::ProverTip::High => 3u128,
-    };
+    // Add Prover Tip Memo so Prover can find/decrypt it
+    if let Some((tip_note, tip_commitment_bytes)) = &_prover_tip_note_opt {
+        if let Some(ref prover_address) = prover_address_opt {
+            // Prover IVK bytes from address
+            let prover_bytes = parse_recipient_32(prover_address)?;
+            let tip_plaintext =
+                build_v1_plaintext(&tip_note.nonce, prover_tip_amount, b"prover tip");
+            let mut tip_nonce = [0u8; 12];
+            rng.fill_bytes(&mut tip_nonce);
+
+            // Encrypt for Prover using ECDH (TVK)
+            let mut tip_ephemeral_secret = [0u8; 32];
+            rng.fill_bytes(&mut tip_ephemeral_secret);
+            let prover_ivk_obj = IncomingViewingKey::from_bytes(prover_bytes);
+            let tip_tvk = TransactionViewKey::derive_sender(&tip_ephemeral_secret, &prover_ivk_obj);
+            let tip_ephemeral_public = tip_tvk.ephemeral_public();
+
+            let encrypted_tip =
+                encrypt_memo_v1(&tip_plaintext, tip_tvk.shared_secret(), &tip_nonce)?;
+
+            output_memos_json.push(serde_json::json!({
+                "note_commitment": hex::encode(tip_commitment_bytes),
+                "fingerprint": hex::encode(&prover_bytes), // Prover IVK as fingerprint
+                "memo": hex::encode(encrypted_tip),
+                "ephemeral_public": hex::encode(tip_ephemeral_public),
+                "sender_fingerprint": hex::encode(sender_fvk.fingerprint()),
+            }));
+        }
+    }
+
+    let prover_tip = prover_tip_amount;
 
     let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:9093".to_string());
@@ -1199,6 +1527,10 @@ pub async fn send_transaction(
             "prover rejected submission (status {status}): {text}"
         ));
     }
+
+    // Fee calculation logic moved up for OVK
+    // Just reusing usage variables if needed or they can be removed if strictly local
+    // let prover_tip = ... (already calculated above)
 
     let nullifier_hexs: Vec<String> = spend_nullifiers
         .iter()
@@ -1283,7 +1615,7 @@ pub async fn mint_dev_faucet(
     };
     use praph_circuits::hash::{fr_from_bytes, fr_to_bytes};
     use praph_circuits::inputs::{ClientPublicInputs, MAX_ENCRYPTED_MESSAGE_BYTES};
-    use praph_circuits::keys::SpendingKey;
+    use praph_circuits::keys::{IncomingViewingKey, SpendingKey, TransactionViewKey};
     use praph_circuits::merkle::MerklePath;
     use praph_circuits::note::Note;
     use rand::RngCore;
@@ -1312,34 +1644,9 @@ pub async fn mint_dev_faucet(
     let helper_url = format!("{}/api/v1/helper", helper.trim_end_matches('/'));
     let http = reqwest::Client::new();
 
-    let roots_resp = http
-        .post(&helper_url)
-        .json(&HelperRequest::GetStateRoots)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let roots_resp: HelperResponse = roots_resp.json().await.map_err(|e| e.to_string())?;
-    let (commitment_root_bytes, nullifier_root_bytes) = match roots_resp {
-        HelperResponse::StateRootsResult {
-            commitment_root,
-            nullifier_root,
-        } => {
-            let c =
-                hex::decode(commitment_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-            let n =
-                hex::decode(nullifier_root.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-            if c.len() != 32 || n.len() != 32 {
-                return Err("invalid state roots".to_string());
-            }
-            let mut c_arr = [0u8; 32];
-            c_arr.copy_from_slice(&c);
-            let mut n_arr = [0u8; 32];
-            n_arr.copy_from_slice(&n);
-            (c_arr, n_arr)
-        }
-        HelperResponse::Error { message } => return Err(message),
-        _ => return Err("unexpected helper response".to_string()),
-    };
+    // Get state roots directly from L1 node (not helper) to avoid sync lag
+    let rpc_url = db::get_node_rpc_url(&db)?;
+    let (commitment_root_bytes, nullifier_root_bytes) = get_state_roots_from_node(&rpc_url).await?;
 
     let commitment_root_fr = fr_from_bytes(&commitment_root_bytes);
     let nullifier_root_fr = fr_from_bytes(&nullifier_root_bytes);
@@ -1348,10 +1655,14 @@ pub async fn mint_dev_faucet(
     let mut note_nonce = [0u8; 32];
     rng.fill_bytes(&mut note_nonce);
 
-    let recipient_commitment = fr_from_bytes(&spending_key_bytes);
+    // For self-mint: use IVK as recipient_commitment basis (consistent with new protocol)
+    let to_ivk = to_fvk.incoming();
+    let to_ivk_bytes = *to_ivk.as_bytes();
+    let recipient_commitment = fr_from_bytes(&to_ivk_bytes);
+    // Minting to self - we know our own SK, so use Note::new
     let output_note = Note::new(
         to_sk,
-        to_fvk.incoming().clone(),
+        to_ivk.clone(),
         amount_minor_u128,
         recipient_commitment,
         note_nonce,
@@ -1359,7 +1670,7 @@ pub async fn mint_dev_faucet(
     let output_commitment = output_note.commitment();
     let output_commitment_bytes = fr_to_bytes(&output_commitment);
     let output_commitment_hex = hex::encode(output_commitment_bytes);
-    let fingerprint_hex = hex::encode(to_fvk.fingerprint());
+    let fingerprint_hex = hex::encode(&to_ivk_bytes); // IVK bytes as fingerprint
 
     // Compute the next commitment root using helper-service's commitment tree.
     // This removes the "fresh chain" limitation by inserting at the current next index.
@@ -1447,8 +1758,13 @@ pub async fn mint_dev_faucet(
     let memo_plaintext = build_v1_plaintext(&note_nonce, amount_minor_u128, memo_text.as_bytes());
     let mut memo_nonce = [0u8; 12];
     rng.fill_bytes(&mut memo_nonce);
-    let encrypted_memo =
-        encrypt_memo_v1(&memo_plaintext, to_fvk.memo_key().as_bytes(), &memo_nonce)?;
+
+    // TVK-based ECDH memo encryption (consistent with send_transaction)
+    let mut ephemeral_secret = [0u8; 32];
+    rng.fill_bytes(&mut ephemeral_secret);
+    let tvk = TransactionViewKey::derive_sender(&ephemeral_secret, to_ivk);
+    let ephemeral_public = tvk.ephemeral_public();
+    let encrypted_memo = encrypt_memo_v1(&memo_plaintext, tvk.shared_secret(), &memo_nonce)?;
 
     let public_inputs_json = serde_json::json!({
         "commitment_root": hex::encode(fr_to_bytes(&public_inputs.commitment_root)),
@@ -1462,15 +1778,13 @@ pub async fn mint_dev_faucet(
 
     let output_memos_json = vec![serde_json::json!({
         "note_commitment": hex::encode(output_commitment_bytes),
-        "fingerprint": hex::encode(to_fvk.fingerprint()),
+        "fingerprint": hex::encode(&to_ivk_bytes), // IVK bytes as fingerprint
         "memo": hex::encode(encrypted_memo),
+        "ephemeral_public": hex::encode(ephemeral_public), // For receiver ECDH decryption
+        "sender_fingerprint": hex::encode(to_fvk.outgoing().as_bytes()),
     })];
 
-    let prover_tip = match params.prover_tip {
-        crate::types::ProverTip::Low => 0u128,
-        crate::types::ProverTip::Medium => 1u128,
-        crate::types::ProverTip::High => 3u128,
-    };
+    let prover_tip: u128 = params.prover_tip.parse().unwrap_or(0);
 
     let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:9093".to_string());
@@ -1605,7 +1919,7 @@ pub fn wallet_create(
 }
 
 #[tauri::command]
-pub fn wallet_import(
+pub async fn wallet_import(
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
     mnemonic: String,
@@ -1613,12 +1927,91 @@ pub fn wallet_import(
 ) -> Result<(), String> {
     let enc = wallet.import_with_encrypted_seed(mnemonic, password)?;
     let _ = db::set_encrypted_seed(&db, enc);
-    let _ = db::set_account_count(&db, 1);
-    let _ = db::set_active_account_index(&db, 0);
-    let _ = db::set_account_name_for_index(&db, 0, "Account 1".to_string());
-    if let Ok(addr) = wallet.generate_address() {
-        let _ = db::set_receive_address_for_index(&db, 0, addr.address);
+
+    // Account discovery loop
+    let mut found_count = 0;
+    let mut consecutive_empty = 0;
+    // Check up to 50 accounts, stop if 3 consecutive empty
+    for i in 0..50 {
+        use praph_circuits::keys::SpendingKey;
+
+        // Derive key for this index
+        // Since wallet is unlocked by import, valid to call spending_key_bytes_for_index
+        let spending_key_bytes = match wallet.spending_key_bytes_for_index(i) {
+            Ok(k) => k,
+            Err(_) => break, // Should not happen if seed is set
+        };
+        let sk = SpendingKey::from_bytes(spending_key_bytes);
+        let fvk = sk.derive_full_viewing_key();
+        let fingerprint = hex::encode(fvk.fingerprint());
+        let sender_fingerprint = hex::encode(fvk.outgoing().as_bytes());
+
+        // Check activity via Helper
+        let helper_url = db::get_helper_service_url(&db)?;
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/v1/helper", helper_url.trim_end_matches('/'));
+
+        let req_in = HelperRequest::GetMemosByFingerprint {
+            fingerprint: fingerprint.clone(),
+        };
+        let req_out = HelperRequest::GetOutgoingMemosBySenderFingerprint {
+            sender_fingerprint: sender_fingerprint.clone(),
+        };
+
+        let resp_in = client.post(&url).json(&req_in).send().await.ok();
+        let resp_out = client.post(&url).json(&req_out).send().await.ok();
+
+        let mut active = false;
+
+        if let Some(r) = resp_in {
+            if let Ok(HelperResponse::GetMemosByFingerprintResult { notes }) = r.json().await {
+                if !notes.is_empty() {
+                    active = true;
+                }
+            }
+        }
+        if !active {
+            if let Some(r) = resp_out {
+                if let Ok(HelperResponse::GetOutgoingMemosBySenderFingerprintResult { notes }) =
+                    r.json().await
+                {
+                    if !notes.is_empty() {
+                        active = true;
+                    }
+                }
+            }
+        }
+
+        // Always include account 0
+        if i == 0 {
+            active = true;
+        }
+
+        if active {
+            found_count = i + 1;
+            consecutive_empty = 0;
+            let _ = db::set_account_name_for_index(&db, i, format!("Account {}", i + 1));
+            // Pre-generate address
+            let _ = wallet.spending_key_bytes_for_index(i);
+            // Wallet internally caches/manages address generation if needed?
+            // Actually wallet.generate_address generates for active account?
+            // Need to change active account to generate address?
+            // generate_address uses active account index.
+            let _ = db::set_active_account_index(&db, i);
+            if let Ok(addr) = wallet.generate_address() {
+                let _ = db::set_receive_address_for_index(&db, i, addr.address);
+            }
+        } else {
+            consecutive_empty += 1;
+            if consecutive_empty >= 2 {
+                break;
+            }
+        }
     }
+
+    let _ = db::set_account_count(&db, found_count.max(1));
+    let _ = db::set_active_account_index(&db, 0);
+
     Ok(())
 }
 
@@ -1729,10 +2122,14 @@ pub fn get_accounts_state(
                 a
             }
         };
+
+        let zk_address = wallet.generate_zk_address_for_index(idx)?;
+
         accounts.push(AccountInfo {
             index: idx,
             name,
             address,
+            zk_address,
             is_active: idx == active,
         });
     }
@@ -1863,10 +2260,13 @@ pub async fn discover_accounts(
             let _ = db::set_receive_address_for_index(&db, index, address.clone());
             let _ = db::set_account_name_for_index(&db, index, name.clone());
 
+            let zk_address = wallet.generate_zk_address_for_index(index)?;
+
             discovered_accounts.push(AccountInfo {
                 index,
                 name,
                 address,
+                zk_address,
                 is_active: false,
             });
         } else {
@@ -1920,4 +2320,202 @@ pub fn get_settings(db: tauri::State<'_, DbState>) -> Result<Settings, String> {
 #[tauri::command]
 pub fn set_helper_service_url(db: tauri::State<'_, DbState>, url: String) -> Result<(), String> {
     db::set_helper_service_url(&db, url)
+}
+
+// =============================================================================
+// L2 ETH Wallet Commands
+// =============================================================================
+
+use crate::types::{L2AddressResult, L2Balance, L2Config, L2SendParams, L2SendResult};
+
+/// Get L2 ETH address for the active account
+#[tauri::command]
+pub fn get_l2_address(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<L2AddressResult, String> {
+    let active = db::get_active_account_index(&db)?;
+    let l1_address = wallet.generate_address_for_index(active)?.address;
+    let l2_address = wallet.eth_address_for_index(active)?;
+    Ok(L2AddressResult {
+        l1_address,
+        l2_address,
+    })
+}
+
+/// Get L2 balance (ETH and wPRAF) for the active account
+#[tauri::command]
+pub async fn get_l2_balance(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+) -> Result<L2Balance, String> {
+    let active = db::get_active_account_index(&db)?;
+    let eth_address = wallet.eth_address_for_index(active)?;
+
+    // Get L2 RPC URL from settings or use default
+    let l2_rpc_url =
+        db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
+    let wpraf_address = db::get_wpraf_address(&db).ok();
+
+    let config = crate::l2_client::L2Config {
+        rpc_url: l2_rpc_url,
+        wpraf_address,
+        bridge_address: None,
+        chain_id: 1337,
+    };
+
+    let client = crate::l2_client::L2Client::new(config)?;
+    let balance = client.get_balance(&eth_address).await?;
+
+    Ok(L2Balance {
+        praf: balance.praf,
+        wpraf: balance.wpraf,
+        address: eth_address,
+    })
+}
+
+/// Send L2 transaction (ETH or wPRAF)
+#[tauri::command]
+pub async fn send_l2_transaction(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    params: L2SendParams,
+) -> Result<L2SendResult, String> {
+    let active = db::get_active_account_index(&db)?;
+    let private_key = wallet.derive_eth_key(active)?;
+
+    // Get L2 config
+    let l2_rpc_url =
+        db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
+    let wpraf_address = db::get_wpraf_address(&db).ok();
+
+    let config = crate::l2_client::L2Config {
+        rpc_url: l2_rpc_url,
+        wpraf_address,
+        bridge_address: None,
+        chain_id: 1337,
+    };
+
+    let client = crate::l2_client::L2Client::new(config)?;
+    let l2_params = crate::l2_client::L2SendParams {
+        to: params.to,
+        amount: params.amount,
+        token: params.token,
+        gas_price: None,
+    };
+
+    let result = client.send_transaction(l2_params, &private_key).await?;
+
+    Ok(L2SendResult {
+        tx_hash: result.tx_hash,
+        status: result.status,
+    })
+}
+
+/// Get L2 configuration
+#[tauri::command]
+pub fn get_l2_config(db: tauri::State<'_, DbState>) -> Result<L2Config, String> {
+    let rpc_url = db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
+    let wpraf_address = db::get_wpraf_address(&db).ok();
+    let bridge_address = db::get_bridge_address(&db).ok();
+
+    Ok(L2Config {
+        rpc_url,
+        wpraf_address,
+        bridge_address,
+        chain_id: 1337,
+    })
+}
+
+/// Set L2 RPC URL
+#[tauri::command]
+pub fn set_l2_rpc_url(db: tauri::State<'_, DbState>, url: String) -> Result<(), String> {
+    db::set_l2_rpc_url(&db, url)
+}
+
+/// Set wPRAF contract address
+#[tauri::command]
+pub fn set_wpraf_address(db: tauri::State<'_, DbState>, address: String) -> Result<(), String> {
+    db::set_wpraf_address(&db, address)
+}
+
+/// Set Bridge contract address
+#[tauri::command]
+pub fn set_bridge_address(db: tauri::State<'_, DbState>, address: String) -> Result<(), String> {
+    db::set_bridge_address(&db, address)
+}
+
+/// Withdraw L2 funds (burn wPRAF)
+#[tauri::command]
+pub async fn withdraw_l2_funds(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    amount: String,
+) -> Result<String, String> {
+    let active = db::get_active_account_index(&db)?;
+    let private_key = wallet.derive_eth_key(active)?;
+
+    // Get L2 config
+    let l2_rpc_url =
+        db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
+    let wpraf_address = db::get_wpraf_address(&db).ok();
+    // Bridge address not needed for burn, but good to have in config
+    let bridge_address = db::get_bridge_address(&db).ok();
+
+    let config = crate::l2_client::L2Config {
+        rpc_url: l2_rpc_url,
+        wpraf_address,
+        bridge_address,
+        chain_id: 1337,
+    };
+
+    let client = crate::l2_client::L2Client::new(config)?;
+    let tx_hash = client.burn_wpraf(amount, &private_key).await?;
+
+    Ok(tx_hash)
+}
+
+#[tauri::command]
+pub async fn get_fee_estimates() -> Result<crate::types::FeeEstimates, String> {
+    // 1. Get Prover URL (env or default)
+    let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:9093".to_string());
+
+    // 2. Default fallback
+    let default_estimates = crate::types::FeeEstimates {
+        base_fee: 1,
+        min_tip_per_action: 1,
+        average_tip: 5,
+    };
+
+    // 3. Fetch
+    let client = reqwest::Client::new();
+    let url = format!("{}/fee-estimate", prover_url);
+
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                match resp.json::<crate::types::FeeEstimates>().await {
+                    Ok(est) => Ok(est),
+                    Err(e) => {
+                        println!("Failed to parse fee estimates: {}. Using defaults.", e);
+                        Ok(default_estimates)
+                    }
+                }
+            } else {
+                println!(
+                    "Prover returned error for fee estimate: {}. Using defaults.",
+                    resp.status()
+                );
+                Ok(default_estimates)
+            }
+        }
+        Err(e) => {
+            println!(
+                "Failed to contact prover for fee estimate: {}. Using defaults.",
+                e
+            );
+            Ok(default_estimates)
+        }
+    }
 }
