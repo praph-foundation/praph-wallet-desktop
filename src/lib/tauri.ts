@@ -42,13 +42,15 @@ export interface TxSummary {
   memo?: string;
   timestamp: number;
   status: TxStatus;
+  recipientAddress?: string;
+  senderAddress?: string;
 }
 
 export interface SendParams {
   to: string;
   amount: string;
   memo?: string;
-  proverTip: "low" | "medium" | "high";
+  proverTip: string;
 }
 
 export interface SendResult {
@@ -59,7 +61,8 @@ export interface BridgeDepositParams {
   l2Address: string;
   amount: string;
   memo?: string;
-  proverTip: "low" | "medium" | "high";
+  proverTip: string;
+  autoWrap?: boolean;
 }
 
 export interface BridgeDepositResult {
@@ -69,7 +72,7 @@ export interface BridgeDepositResult {
 export interface MintDevFaucetParams {
   amount: string;
   memo?: string;
-  proverTip: "low" | "medium" | "high";
+  proverTip: string;
 }
 
 export interface MintDevFaucetResult {
@@ -93,6 +96,7 @@ export interface AccountInfo {
   index: number;
   name: string;
   address: string;
+  zkAddress: string;
   isActive: boolean;
 }
 
@@ -128,9 +132,51 @@ export interface TvkResult {
   tvk: string;
 }
 
+// L2 Types
+export interface L2Balance {
+  praf: string;
+  wpraf: string;
+  address: string;
+}
+
+export interface L2SendParams {
+  to: string;
+  amount: string;
+  token: "praf" | "wpraf";
+}
+
+export interface L2SendResult {
+  txHash: string;
+  status: string;
+}
+
+export interface L2Config {
+  rpcUrl: string;
+  wprafAddress?: string;
+  bridgeAddress?: string;
+  chainId: number;
+}
+
+export interface L2AddressResult {
+  l1Address: string;
+  l2Address: string;
+}
+
 export interface WalletUnlockParams {
   password: string;
   [key: string]: unknown;
+}
+
+export interface FeeEstimates {
+  base_fee: number; // u128 from rust comes as number if small, but might be string/bigint if large?
+  // serde_json treats u128 as number if it fits? No, usually fails or requires string.
+  // My backend struct used u128. Default serde serialization for u128 is "number" if it fits, else fails?
+  // Rust serde_json serialization of u128 is integer. JS numbers are doubles (safe up to 2^53).
+  // 1, 5, 20 fit easily.
+  // But strictly, u128 should be treated as string or number.
+  // Let's assume number for now as expected values are small (units).
+  min_tip_per_action: number;
+  average_tip: number;
 }
 
 function isTauriRuntime(): boolean {
@@ -157,7 +203,7 @@ let mockBalance: Balance = {
 let mockTxs: TxSummary[] = [];
 
 let mockAccounts: AccountInfo[] = [
-  { index: 0, name: "Account 1", address: "", isActive: true },
+  { index: 0, name: "Account 1", address: "", zkAddress: "", isActive: true },
 ];
 let mockActiveAccountIndex = 0;
 
@@ -193,6 +239,17 @@ interface WalletApi {
   scanNotes: (params: ScanNotesParams) => Promise<SyncMetadata>;
   exportViewingKeys: (password: string) => Promise<ViewingKeysResult>;
   exportTvk: (txId: string, password: string) => Promise<TvkResult>;
+  getFeeEstimates: () => Promise<FeeEstimates>;
+
+  // L2 API
+  getL2Address: () => Promise<L2AddressResult>;
+  getL2Balance: () => Promise<L2Balance>;
+  sendL2Transaction: (params: L2SendParams) => Promise<L2SendResult>;
+  getL2Config: () => Promise<L2Config>;
+  setL2RpcUrl: (url: string) => Promise<void>;
+  setWprafAddress: (address: string) => Promise<void>;
+  setBridgeAddress: (address: string) => Promise<void>;
+  withdrawL2Funds: (amount: string) => Promise<string>;
 }
 
 const tauriApi: WalletApi = {
@@ -247,6 +304,18 @@ const tauriApi: WalletApi = {
     invokeSafe<ViewingKeysResult>("export_viewing_keys", { password }),
   exportTvk: (txId: string, password: string) =>
     invokeSafe<TvkResult>("export_tvk", { tx_id: txId, password }),
+  getFeeEstimates: () => invokeSafe<FeeEstimates>("get_fee_estimates"),
+
+  // L2 API
+  getL2Address: () => invokeSafe<L2AddressResult>("get_l2_address"),
+  getL2Balance: () => invokeSafe<L2Balance>("get_l2_balance"),
+  sendL2Transaction: (params: L2SendParams) =>
+    invokeSafe<L2SendResult>("send_l2_transaction", { params }),
+  getL2Config: () => invokeSafe<L2Config>("get_l2_config"),
+  setL2RpcUrl: (url: string) => invokeSafe<void>("set_l2_rpc_url", { url }),
+  setWprafAddress: (address: string) => invokeSafe<void>("set_wpraf_address", { address }),
+  setBridgeAddress: (address: string) => invokeSafe<void>("set_bridge_address", { address }),
+  withdrawL2Funds: (amount: string) => invokeSafe<string>("withdraw_l2_funds", { amount }),
 };
 
 const mockApi: WalletApi = {
@@ -368,7 +437,7 @@ const mockApi: WalletApi = {
     const next = mockAccounts.length;
     mockAccounts = [
       ...mockAccounts.map((a) => ({ ...a, isActive: a.index === mockActiveAccountIndex })),
-      { index: next, name: `Account ${next + 1}`, address: "", isActive: false },
+      { index: next, name: `Account ${next + 1}`, address: "", zkAddress: "", isActive: false },
     ];
     return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
   },
@@ -377,7 +446,7 @@ const mockApi: WalletApi = {
     const next = mockAccounts.length;
     mockAccounts = [
       ...mockAccounts.map((a) => ({ ...a, isActive: a.index === mockActiveAccountIndex })),
-      { index: next, name, address: "", isActive: false },
+      { index: next, name, address: "", zkAddress: "", isActive: false },
     ];
     return { accounts: mockAccounts, activeAccountIndex: mockActiveAccountIndex };
   },
@@ -436,6 +505,45 @@ const mockApi: WalletApi = {
   exportTvk: async (_txId: string, _password: string): Promise<TvkResult> => {
     await sleep(150);
     return { tvk: "mock_tvk" };
+  },
+  getFeeEstimates: async (): Promise<FeeEstimates> => {
+    await sleep(50);
+    return {
+      base_fee: 1,
+      min_tip_per_action: 1,
+      average_tip: 5,
+    };
+  },
+
+  // L2 Mock
+  getL2Address: async (): Promise<L2AddressResult> => {
+    await sleep(50);
+    return { l1Address: "", l2Address: "0x0000000000000000000000000000000000000000" };
+  },
+  getL2Balance: async (): Promise<L2Balance> => {
+    await sleep(50);
+    return { praf: "0.00", wpraf: "0.00", address: "0x..." };
+  },
+  sendL2Transaction: async (_params: L2SendParams): Promise<L2SendResult> => {
+    await sleep(100);
+    throw new Error("sendL2Transaction is only available in backend");
+  },
+  getL2Config: async (): Promise<L2Config> => {
+    await sleep(50);
+    return { rpcUrl: "http://localhost:8545", chainId: 1337 };
+  },
+  setL2RpcUrl: async (_url: string): Promise<void> => {
+    await sleep(50);
+  },
+  setWprafAddress: async (_address: string): Promise<void> => {
+    await sleep(50);
+  },
+  setBridgeAddress: async (_address: string): Promise<void> => {
+    await sleep(50);
+  },
+  withdrawL2Funds: async (_amount: string): Promise<string> => {
+    await sleep(100);
+    throw new Error("withdrawL2Funds is only available in backend");
   },
 };
 

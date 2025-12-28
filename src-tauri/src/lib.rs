@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 mod commands;
 mod db;
+pub mod l2_client;
 mod types;
 mod wallet;
 
@@ -96,7 +97,17 @@ pub fn run() {
             commands::export_viewing_keys,
             commands::export_tvk,
             commands::get_settings,
-            commands::set_helper_service_url
+            commands::set_helper_service_url,
+            // L2 ETH Wallet
+            commands::get_l2_address,
+            commands::get_l2_balance,
+            commands::send_l2_transaction,
+            commands::get_l2_config,
+            commands::set_l2_rpc_url,
+            commands::set_wpraf_address,
+            commands::set_bridge_address,
+            commands::withdraw_l2_funds,
+            commands::get_fee_estimates
         ])
         .run(ctx)
         .expect("error while running tauri application");

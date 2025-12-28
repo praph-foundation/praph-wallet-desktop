@@ -889,6 +889,14 @@ pub fn set_helper_service_url(db: &DbState, url: String) -> Result<(), String> {
     set_setting(db, "helper_service_url", &url)
 }
 
+pub fn get_node_rpc_url(db: &DbState) -> Result<String, String> {
+    Ok(get_setting(db, "node_rpc_url")?.unwrap_or_else(|| "http://localhost:9933".to_string()))
+}
+
+pub fn set_node_rpc_url(db: &DbState, url: String) -> Result<(), String> {
+    set_setting(db, "node_rpc_url", &url)
+}
+
 pub fn get_receive_address(db: &DbState) -> Result<Option<String>, String> {
     get_setting(db, "receive_address")
 }
@@ -1003,4 +1011,29 @@ pub fn set_sync_metadata(db: &DbState, meta: &SyncMetadata) -> Result<(), String
     }
 
     Ok(())
+}
+
+// L2 Settings
+pub fn get_l2_rpc_url(db: &DbState) -> Result<String, String> {
+    Ok(get_setting(db, "l2_rpc_url")?.unwrap_or_else(|| "http://localhost:8545".to_string()))
+}
+
+pub fn set_l2_rpc_url(db: &DbState, url: String) -> Result<(), String> {
+    set_setting(db, "l2_rpc_url", &url)
+}
+
+pub fn get_wpraf_address(db: &DbState) -> Result<String, String> {
+    get_setting(db, "wpraf_address")?.ok_or_else(|| "wPRAF address not set".to_string())
+}
+
+pub fn set_wpraf_address(db: &DbState, address: String) -> Result<(), String> {
+    set_setting(db, "wpraf_address", &address)
+}
+
+pub fn get_bridge_address(db: &DbState) -> Result<String, String> {
+    get_setting(db, "bridge_address")?.ok_or_else(|| "Bridge address not set".to_string())
+}
+
+pub fn set_bridge_address(db: &DbState, address: String) -> Result<(), String> {
+    set_setting(db, "bridge_address", &address)
 }

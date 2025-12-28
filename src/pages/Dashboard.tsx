@@ -36,12 +36,15 @@ import {
   Coins,
   Inbox,
   History,
-  Info
+  Info,
+  Wallet
 } from "lucide-react";
 
 export default function DashboardPage() {
   const qc = useQueryClient();
   const activeAccountIndex = useWalletStore((s) => s.activeAccountIndex);
+  const accounts = useWalletStore((s) => s.accounts);
+  const activeAccount = accounts.find((a) => a.index === activeAccountIndex);
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
   const [tvkOpen, setTvkOpen] = useState(false);
   const [tvkPassword, setTvkPassword] = useState("");
@@ -74,6 +77,12 @@ export default function DashboardPage() {
     queryKey: ["syncMetadata"],
     queryFn: api.getSyncMetadata,
     refetchInterval: 5000,
+  });
+
+  const l2BalanceQuery = useQuery({
+    queryKey: ["l2Balance", activeAccountIndex],
+    queryFn: api.getL2Balance,
+    refetchInterval: 10000,
   });
 
   const mintMutation = useMutation({
@@ -159,6 +168,8 @@ export default function DashboardPage() {
           { label: "Confirmed", value: balanceQuery.data?.confirmed, icon: CheckCircle2, color: "text-emerald-500" },
           { label: "Pending", value: balanceQuery.data?.pending, icon: Clock, color: "text-amber-500" },
           { label: "Unspent Notes", value: balanceQuery.data?.unspent, icon: Inbox, color: "text-blue-500" },
+          { label: "L2 PRAF", value: l2BalanceQuery.data?.praf ? `${l2BalanceQuery.data.praf} PRAF` : "-", icon: Wallet, color: "text-purple-500" },
+          { label: "L2 wPRAF", value: l2BalanceQuery.data?.wpraf ? `${l2BalanceQuery.data.wpraf} wPRAF` : "-", icon: Coins, color: "text-purple-400" },
         ].map((stat, i) => (
           <Card key={i} className="bg-background/50 backdrop-blur-sm border-none shadow-md ring-1 ring-white/5 transition-transform hover:scale-[1.02]">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -171,6 +182,42 @@ export default function DashboardPage() {
           </Card>
         ))}
       </section>
+
+      {/* ZK Address Display (Primary) */}
+      {activeAccount?.zkAddress && (
+        <Card className="bg-emerald-500/5 backdrop-blur-sm border-none shadow-md ring-1 ring-emerald-500/20">
+          <CardContent className="py-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-emerald-500/20">
+                <Shield className="w-4 h-4 text-emerald-500" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground font-medium">Privacy Address (ZK)</div>
+                <div className="font-mono text-sm truncate max-w-[400px] text-emerald-500">{activeAccount.zkAddress}</div>
+              </div>
+            </div>
+            <CopyButton value={activeAccount.zkAddress} label="" className="h-8 w-8 bg-emerald-500/10 hover:bg-emerald-500/20 border-none text-emerald-500" />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* L2 Address Display */}
+      {l2BalanceQuery.data?.address && (
+        <Card className="bg-purple-500/5 backdrop-blur-sm border-none shadow-md ring-1 ring-purple-500/20">
+          <CardContent className="py-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-purple-500/20">
+                <Wallet className="w-4 h-4 text-purple-500" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground font-medium">L2 Address (EVM)</div>
+                <div className="font-mono text-sm truncate max-w-[400px]">{l2BalanceQuery.data.address}</div>
+              </div>
+            </div>
+            <CopyButton value={l2BalanceQuery.data.address} label="" className="h-8 w-8 bg-purple-500/10 hover:bg-purple-500/20 border-none text-purple-500" />
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2 bg-background/50 backdrop-blur-sm border-none shadow-lg ring-1 ring-white/5 overflow-hidden">
@@ -193,7 +240,7 @@ export default function DashboardPage() {
                     className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-white/5 group"
                     onClick={() => setSelectedTxId(tx.id)}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
                       <div className={`p-2 rounded-full ${tx.direction === "incoming" ? "bg-emerald-500/10" : "bg-primary/10"}`}>
                         {tx.direction === "incoming" ? (
                           <ArrowDownLeft className={`w-5 h-5 ${tx.direction === "incoming" ? "text-emerald-500" : "text-primary"}`} />
@@ -201,7 +248,7 @@ export default function DashboardPage() {
                           <ArrowUpRight className="w-5 h-5 text-primary" />
                         )}
                       </div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="text-sm font-semibold truncate">
                           {tx.direction === "incoming" ? "Received PRAF" : "Sent PRAF"}
                         </div>
@@ -212,6 +259,13 @@ export default function DashboardPage() {
                           <span className="opacity-20">|</span>
                           <span className="truncate max-w-[80px] font-mono">{tx.id.slice(0, 8)}...</span>
                         </div>
+                        {/* Show recipient for outgoing transactions */}
+                        {tx.direction === "outgoing" && tx.recipientAddress && (
+                          <div className="mt-1 text-[10px] text-muted-foreground/60 flex items-center gap-1">
+                            <span className="opacity-50">To:</span>
+                            <span className="font-mono truncate max-w-[120px]">{tx.recipientAddress}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div className="text-right flex flex-col items-end gap-1.5">

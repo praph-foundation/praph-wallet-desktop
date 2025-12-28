@@ -1,11 +1,10 @@
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { api } from "../lib/tauri";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Card, CardContent } from "./ui/card";
 import { useWalletStore } from "../state/walletStore";
-import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus, ChevronDown, Check, Pencil } from "lucide-react";
+import LayerTabs from "./LayerTabs";
+import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus, ChevronDown, Check, Pencil, LogOut } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,7 +15,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { toast } from "sonner";
-import type { AccountInfo, AccountsState } from "../lib/tauri";
+import type { AccountInfo } from "../lib/tauri";
 
 interface AccountItemProps {
   account: AccountInfo;
@@ -112,52 +111,69 @@ function AccountItem({
 
 export default function AppLayout() {
   const navigate = useNavigate();
-  const location = useLocation();
   const lockState = useWalletStore((s) => s.lockState);
   const lock = useWalletStore((s) => s.lock);
-  const setHasWallet = useWalletStore((s) => s.setHasWallet);
-  const syncStatus = useWalletStore((s) => s.syncStatus);
-  const syncMessage = useWalletStore((s) => s.syncMessage);
   const accounts = useWalletStore((s) => s.accounts);
   const activeAccountIndex = useWalletStore((s) => s.activeAccountIndex);
   const setAccountsState = useWalletStore((s) => s.setAccountsState);
+  const activeLayer = useWalletStore((s) => s.activeLayer);
 
   const [accountPickerOpen, setAccountPickerOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newAccountName, setNewAccountName] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
+  const [l2Address, setL2Address] = useState<string | null>(null);
 
   useEffect(() => {
     if (lockState !== "unlocked") return;
     api
       .getAccountsState()
       .then((s) => setAccountsState(s.accounts, s.activeAccountIndex))
-      .catch(() => {
-        // ignore
-      });
+      .catch(() => { });
   }, [lockState, setAccountsState]);
 
-  function pageTitle(): string {
-    const p = location.pathname;
-    if (p === "/") return "Dashboard";
-    if (p.startsWith("/send")) return "Send";
-    if (p.startsWith("/bridge")) return "Bridge";
-    if (p.startsWith("/receive")) return "Receive";
-    if (p.startsWith("/settings")) return "Settings";
-    return "Praph Wallet";
-  }
+  // Fetch L2 address when on L2 layer
+  useEffect(() => {
+    if (activeLayer === "l2") {
+      api.getL2Balance().then((b) => setL2Address(b.address)).catch(() => { });
+    }
+  }, [activeLayer, activeAccountIndex]);
+
+  // Layer-specific navigation items
+  const l1NavItems = [
+    { to: "/l1", icon: LayoutDashboard, label: "Dashboard" },
+    { to: "/l1/send", icon: Send, label: "Send" },
+    { to: "/l1/receive", icon: Download, label: "Receive" },
+    { to: "/l1/bridge", icon: ArrowLeftRight, label: "Bridge to L2" },
+  ];
+
+  const l2NavItems = [
+    { to: "/l2", icon: LayoutDashboard, label: "Dashboard" },
+    { to: "/l2/send", icon: Send, label: "Send" },
+    { to: "/l2/receive", icon: Download, label: "Receive" },
+    { to: "/l2/bridge", icon: ArrowLeftRight, label: "Bridge to L1" },
+  ];
+
+  const navItems = activeLayer === "l1" ? l1NavItems : l2NavItems;
+  const layerColor = activeLayer === "l1" ? "emerald" : "purple";
 
   return (
     <div className="h-full bg-background text-foreground">
       <div className="flex h-full">
-        <aside className="w-72 border-r border-border p-4">
+        <aside className="w-72 border-r border-border p-4 flex flex-col">
           <div className="mb-4">
             <div className="text-base font-semibold">Praph Wallet</div>
             <div className="text-xs text-muted-foreground">Official Desktop Wallet</div>
           </div>
 
+          {/* Layer Tabs */}
+          <LayerTabs className="mb-4" />
+
+          {/* Account Picker */}
           <div className="mb-4 rounded-md border border-border bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Account</div>
+            <div className="text-xs text-muted-foreground">
+              {activeLayer === "l1" ? "L1 Account" : "L2 Account"}
+            </div>
             <div className="mt-2 flex items-center gap-2">
               <Dialog open={accountPickerOpen} onOpenChange={setAccountPickerOpen}>
                 <DialogTrigger asChild>
@@ -174,7 +190,9 @@ export default function AppLayout() {
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Switch account</DialogTitle>
-                    <DialogDescription>Select the active account for receiving/sending.</DialogDescription>
+                    <DialogDescription>
+                      Select the active {activeLayer === "l1" ? "L1" : "L2"} account.
+                    </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-1">
                     {(accounts.length ? accounts : [{ index: 0, name: "Account 1", address: "", isActive: true }]).map(
@@ -203,39 +221,32 @@ export default function AppLayout() {
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Create new account</DialogTitle>
-                    <DialogDescription>Give your new account a name.</DialogDescription>
+                    <DialogDescription>
+                      A new {activeLayer === "l1" ? "L1" : "L2"} address will be derived from your seed.
+                    </DialogDescription>
                   </DialogHeader>
-                  <div className="space-y-3">
-                    <Input
-                      value={newAccountName}
-                      onChange={(e) => setNewAccountName(e.currentTarget.value)}
-                      placeholder={`Account ${accounts.length + 1}`}
-                    />
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setCreateOpen(false);
-                          setNewAccountName("");
-                        }}
-                      >
-                        Cancel
-                      </Button>
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Input
+                        placeholder="Account name"
+                        value={newAccountName}
+                        onChange={(e) => setNewAccountName(e.currentTarget.value)}
+                      />
+                    </div>
+                    <div className="flex justify-end">
                       <Button
                         onClick={async () => {
-                          if (accountBusy) return;
                           try {
                             setAccountBusy(true);
-                            const name = newAccountName.trim();
-                            const s = name
-                              ? await api.createAccountNamed(name)
+                            const s = newAccountName
+                              ? await api.createAccountNamed(newAccountName)
                               : await api.createAccount();
                             setAccountsState(s.accounts, s.activeAccountIndex);
                             toast.success("Account created");
                             setCreateOpen(false);
                             setNewAccountName("");
                           } catch (e) {
-                            toast.error(e instanceof Error ? e.message : "Failed to create account");
+                            toast.error(e instanceof Error ? e.message : "Failed");
                           } finally {
                             setAccountBusy(false);
                           }
@@ -249,114 +260,46 @@ export default function AppLayout() {
                 </DialogContent>
               </Dialog>
             </div>
-            {accounts.length ? (
-              <div className="mt-2 break-all font-mono text-[11px] text-muted-foreground">
-                {accounts.find((a) => a.index === activeAccountIndex)?.address ?? ""}
-              </div>
-            ) : null}
+            {/* Address display - shows L1 or L2 address based on layer */}
+            <div className="mt-2 break-all font-mono text-[11px] text-muted-foreground">
+              {activeLayer === "l1"
+                ? (accounts.find((a) => a.index === activeAccountIndex)?.address ?? "")
+                : (l2Address ?? "Loading...")}
+            </div>
           </div>
 
-          <nav className="space-y-1">
-            <NavLink
-              to="/"
-              className={({ isActive }) =>
-                [
-                  "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-foreground"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                ].join(" ")
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    className={
-                      "absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary " +
-                      (isActive ? "opacity-100" : "opacity-0")
-                    }
-                  />
-                  <LayoutDashboard className="h-4 w-4" />
-                  <span className="flex-1">Dashboard</span>
-                </>
-              )}
-            </NavLink>
+          {/* Navigation */}
+          <nav className="space-y-1 flex-1">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/l1" || item.to === "/l2"}
+                className={({ isActive }) =>
+                  [
+                    "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+                    isActive
+                      ? `bg-${layerColor}-500/10 text-foreground`
+                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                  ].join(" ")
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <span
+                      className={
+                        `absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-${layerColor}-500 ` +
+                        (isActive ? "opacity-100" : "opacity-0")
+                      }
+                    />
+                    <item.icon className="h-4 w-4" />
+                    <span className="flex-1">{item.label}</span>
+                  </>
+                )}
+              </NavLink>
+            ))}
 
-            <NavLink
-              to="/send"
-              className={({ isActive }) =>
-                [
-                  "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-foreground"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                ].join(" ")
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    className={
-                      "absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary " +
-                      (isActive ? "opacity-100" : "opacity-0")
-                    }
-                  />
-                  <Send className="h-4 w-4" />
-                  <span className="flex-1">Send</span>
-                </>
-              )}
-            </NavLink>
-
-            <NavLink
-              to="/bridge"
-              className={({ isActive }) =>
-                [
-                  "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-foreground"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                ].join(" ")
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    className={
-                      "absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary " +
-                      (isActive ? "opacity-100" : "opacity-0")
-                    }
-                  />
-                  <ArrowLeftRight className="h-4 w-4" />
-                  <span className="flex-1">Bridge</span>
-                </>
-              )}
-            </NavLink>
-
-            <NavLink
-              to="/receive"
-              className={({ isActive }) =>
-                [
-                  "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-foreground"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                ].join(" ")
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    className={
-                      "absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary " +
-                      (isActive ? "opacity-100" : "opacity-0")
-                    }
-                  />
-                  <Download className="h-4 w-4" />
-                  <span className="flex-1">Receive</span>
-                </>
-              )}
-            </NavLink>
-
+            {/* Settings (shared) */}
             <NavLink
               to="/settings"
               className={({ isActive }) =>
@@ -383,103 +326,30 @@ export default function AppLayout() {
             </NavLink>
           </nav>
 
-          <Card className="mt-6">
-            <CardContent className="p-3">
-              <div className="text-xs text-muted-foreground">Wallet</div>
-              <div className="mt-1 text-sm font-medium">{lockState}</div>
-              <div className="mt-3 flex gap-2">
-                <Button
-                  size="sm"
-                  onClick={async () => {
-                    if (lockState === "locked") {
-                      navigate("/unlock");
-                      return;
-                    }
-                    try {
-                      await api.walletLock();
-                    } finally {
-                      lock();
-                    }
-                  }}
-                >
-                  {lockState === "locked" ? "Unlock" : "Lock"}
-                </Button>
-
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={async () => {
-                    // Optimistic UI: immediately reset local app state so the user can re-onboard.
-                    lock();
-                    setHasWallet(false);
-                    navigate("/onboarding", { replace: true });
-                    try {
-                      await api.walletLogout();
-                      toast.success("Logged out");
-                    } catch (e) {
-                      toast.error(
-                        e instanceof Error ? e.message : "Logout failed"
-                      );
-                    } finally {
-                      // keep optimistic state
-                    }
-                  }}
-                >
-                  Logout
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Footer */}
+          <div className="pt-4 border-t border-border mt-auto space-y-2">
+            <Button variant="ghost" className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-muted" onClick={() => {
+              lock();
+              navigate("/unlock");
+            }}>
+              <Settings className="h-4 w-4 mr-2" />
+              Lock Wallet
+            </Button>
+            <Button variant="ghost" className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => {
+              // Clear wallet state to force onboarding
+              const setHasWallet = useWalletStore.getState().setHasWallet;
+              setHasWallet(false);
+              lock();
+              navigate("/onboarding");
+            }}>
+              <LogOut className="h-4 w-4 mr-2" />
+              Logout
+            </Button>
+          </div>
         </aside>
 
-        <main className="flex-1 overflow-auto bg-background">
-          <div className="mx-auto w-full max-w-5xl p-6">
-            <header className="mb-6 flex items-center justify-between">
-              <div>
-                <div className="text-xl font-semibold">{pageTitle()}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  Sync: {syncStatus}
-                  {syncMessage ? ` · ${syncMessage}` : ""}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Badge
-                  variant={
-                    syncStatus === "idle"
-                      ? "secondary"
-                      : syncStatus === "syncing"
-                        ? "default"
-                        : "destructive"
-                  }
-                >
-                  {syncStatus}
-                </Badge>
-                <Badge variant={lockState === "locked" ? "secondary" : "default"}>
-                  {lockState}
-                </Badge>
-                <Button
-                  size="sm"
-                  variant={lockState === "locked" ? "default" : "outline"}
-                  onClick={async () => {
-                    if (lockState === "locked") {
-                      navigate("/unlock");
-                      return;
-                    }
-                    try {
-                      await api.walletLock();
-                    } finally {
-                      lock();
-                    }
-                  }}
-                >
-                  {lockState === "locked" ? "Unlock" : "Lock"}
-                </Button>
-              </div>
-            </header>
-
-            <Outlet />
-          </div>
+        <main className="flex-1 overflow-auto p-6">
+          <Outlet />
         </main>
       </div>
     </div>

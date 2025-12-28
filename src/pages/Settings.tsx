@@ -31,8 +31,6 @@ import {
   Fingerprint,
   Loader2,
   Palette,
-  Upload,
-  FileJson,
   Download
 } from "lucide-react";
 
@@ -77,7 +75,7 @@ export default function SettingsPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Configure your vault security and network connectivity.
+            Configure your wallet security and network connectivity.
           </p>
         </div>
       </div>
@@ -340,7 +338,7 @@ export default function SettingsPage() {
             <CardHeader className="pb-3 border-b border-amber-500/10">
               <CardTitle className="text-sm flex items-center gap-2 text-amber-500 font-bold uppercase tracking-widest">
                 <Info className="w-4 h-4" />
-                About PRAPH Vault
+                About Praph Wallet
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-4 space-y-3">

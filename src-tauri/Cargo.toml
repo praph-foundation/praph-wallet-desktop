@@ -44,5 +44,12 @@ rayon = "1.11"
 
 bs58 = "0.5"
 blake2 = "0.10"
+k256 = "0.13"
+sp-core = { version = "32", default-features = false, features = ["full_crypto", "std"] }
 
 praph-circuits = { path = "../../PRAPH/circuits", features = ["halo2"] }
+
+# L2 ETH wallet support
+ethers = { version = "2.0", default-features = false, features = ["rustls", "legacy"] }
+sha3 = "0.10"
+

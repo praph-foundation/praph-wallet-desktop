@@ -4,6 +4,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::Argon2;
 use base64::prelude::*;
 use bip39::{Language, Mnemonic};
+use k256::elliptic_curve::sec1::ToEncodedPoint;
 use keyring::Entry;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -309,10 +310,12 @@ impl WalletState {
         let mut rng = rand::thread_rng();
         let mnemonic = Mnemonic::generate_in_with(&mut rng, Language::English, 24)
             .map_err(|e| e.to_string())?;
-        let seed = mnemonic.to_seed_normalized("");
-        let enc = encrypt_seed(&seed, &password)?;
+        // Store ENTROPY (32 bytes) instead of SEED (64 bytes).
+        // This is crucial for matching Substrate's standard sr25519 derivation which uses entropy.
+        let entropy = mnemonic.to_entropy();
+        let enc = encrypt_seed(&entropy, &password)?;
         eprintln!(
-            "keychain write seed: service={} username={} (create)",
+            "keychain write seed (entropy): service={} username={} (create)",
             self.keyring_service, self.keyring_username
         );
         self.persist_encrypted_seed_primary(&enc)?;
@@ -321,7 +324,7 @@ impl WalletState {
             .unlocked_seed
             .lock()
             .map_err(|_| "Wallet state lock poisoned".to_string())?;
-        *guard = Some(Zeroizing::new(seed.to_vec()));
+        *guard = Some(Zeroizing::new(entropy));
 
         Ok((
             WalletCreateResult {
@@ -344,10 +347,11 @@ impl WalletState {
         let password = password.trim().to_string();
         let mnemonic = Mnemonic::parse_in_normalized(Language::English, &mnemonic)
             .map_err(|e| e.to_string())?;
-        let seed = mnemonic.to_seed_normalized("");
-        let enc = encrypt_seed(&seed, &password)?;
+        // Store ENTROPY (32 bytes)
+        let entropy = mnemonic.to_entropy();
+        let enc = encrypt_seed(&entropy, &password)?;
         eprintln!(
-            "keychain write seed: service={} username={} (import)",
+            "keychain write seed (entropy): service={} username={} (import)",
             self.keyring_service, self.keyring_username
         );
         self.persist_encrypted_seed_primary(&enc)?;
@@ -356,7 +360,7 @@ impl WalletState {
             .unlocked_seed
             .lock()
             .map_err(|_| "Wallet state lock poisoned".to_string())?;
-        *guard = Some(Zeroizing::new(seed.to_vec()));
+        *guard = Some(Zeroizing::new(entropy));
         Ok(enc)
     }
 
@@ -426,61 +430,68 @@ impl WalletState {
         Ok(())
     }
 
-    fn derive_account_id(seed: &[u8], account_index: u32) -> Result<[u8; 32], String> {
-        use bip32::{ChildNumber, XPrv};
+    fn derive_account_id(entropy: &[u8], account_index: u32) -> Result<[u8; 32], String> {
+        use sp_core::{sr25519, Pair};
 
-        if seed.len() < 32 {
-            return Err("Seed too short".to_string());
+        // Reconstruct Mnemonic from ENTROPY (stored as 'seed' in wallet state)
+        if entropy.len() != 32 {
+            return Err(format!(
+                "Invalid entropy length: {} (expected 32)",
+                entropy.len()
+            ));
         }
+        let mnemonic = bip39::Mnemonic::from_entropy(entropy)
+            .map_err(|e| format!("Invalid entropy: {}", e))?;
+        let phrase = mnemonic.to_string();
 
-        // BIP-44 derivation path: m/44'/9999'/account'/0/0
-        // 9999 is PRAPH's coin type (temporary, to be registered officially)
-        // Hardened derivation (') for purpose, coin_type, and account for security
+        // Substrate standard derivation using PHRASE
+        // "phrase //index"
+        // This invokes Substrate's internal BIP39->Seed logic, matching 'praph-node key inspect'
+        let derive_path = if account_index == 0 {
+            phrase.to_string()
+        } else {
+            format!("{}//{}", phrase, account_index)
+        };
 
-        // Derive extended private key from seed
-        let root_key =
-            XPrv::new(seed).map_err(|e| format!("Failed to create master key: {}", e))?;
+        // Create pair from format string
+        let derived_pair = sr25519::Pair::from_string(&derive_path, None)
+            .map_err(|e| format!("Failed to derive sr25519 pair: {:?}", e))?;
 
-        // m/44' (purpose)
-        let purpose =
-            ChildNumber::new(44, true).map_err(|e| format!("Invalid purpose index: {}", e))?;
-        let purpose_key = root_key
-            .derive_child(purpose)
-            .map_err(|e| format!("Failed to derive purpose key: {}", e))?;
+        // 3. Use the first 32 bytes of the SECRET KEY as SpendingKey
+        // The sr25519 secret key is 64 bytes (secret + nonce).
+        // Substrate uses the first 32 bytes as the "mini secret" or scalar source.
+        let full_secret = derived_pair.as_ref().secret.to_bytes();
+        let mut secret_32 = [0u8; 32];
+        secret_32.copy_from_slice(&full_secret[0..32]);
 
-        // m/44'/9999' (coin type)
-        let coin_type =
-            ChildNumber::new(9999, true).map_err(|e| format!("Invalid coin type index: {}", e))?;
-        let coin_key = purpose_key
-            .derive_child(coin_type)
-            .map_err(|e| format!("Failed to derive coin key: {}", e))?;
+        Ok(secret_32)
+    }
 
-        // m/44'/9999'/account' (account)
-        let account = ChildNumber::new(account_index, true)
-            .map_err(|e| format!("Invalid account index: {}", e))?;
-        let account_key = coin_key
-            .derive_child(account)
-            .map_err(|e| format!("Failed to derive account key: {}", e))?;
+    /// Helper to get full sr25519 pair for an index (for public key extraction)
+    fn derive_sr25519_pair(
+        entropy: &[u8],
+        account_index: u32,
+    ) -> Result<sp_core::sr25519::Pair, String> {
+        use sp_core::{sr25519, Pair};
 
-        // m/44'/9999'/account'/0 (change)
-        let change =
-            ChildNumber::new(0, false).map_err(|e| format!("Invalid change index: {}", e))?;
-        let change_key = account_key
-            .derive_child(change)
-            .map_err(|e| format!("Failed to derive change key: {}", e))?;
+        if entropy.len() != 32 {
+            return Err(format!(
+                "Invalid entropy length: {} (expected 32)",
+                entropy.len()
+            ));
+        }
+        let mnemonic = bip39::Mnemonic::from_entropy(entropy)
+            .map_err(|e| format!("Invalid entropy: {}", e))?;
+        let phrase = mnemonic.to_string();
 
-        // m/44'/9999'/account'/0/0 (address index)
-        let address_index =
-            ChildNumber::new(0, false).map_err(|e| format!("Invalid address index: {}", e))?;
-        let final_key = change_key
-            .derive_child(address_index)
-            .map_err(|e| format!("Failed to derive final key: {}", e))?;
+        let derive_path = if account_index == 0 {
+            phrase.to_string()
+        } else {
+            format!("{}//{}", phrase, account_index)
+        };
 
-        // Extract the 32-byte private key
-        let private_key_bytes = final_key.private_key().to_bytes();
-        let mut account_bytes = [0u8; 32];
-        account_bytes.copy_from_slice(&private_key_bytes);
-        Ok(account_bytes)
+        sr25519::Pair::from_string(&derive_path, None)
+            .map_err(|e| format!("Failed to derive sr25519 pair: {:?}", e))
     }
 
     pub fn spending_key_bytes_for_index(&self, account_index: u32) -> Result<[u8; 32], String> {
@@ -499,10 +510,23 @@ impl WalletState {
         let sk_bytes = self.spending_key_bytes_for_index(account_index)?;
         let sk = SpendingKey::from_bytes(sk_bytes);
         let fvk = sk.derive_full_viewing_key();
-        Ok(hex::encode(fvk.fingerprint()))
+        // Use IVK bytes as fingerprint (consistent with new address system)
+        Ok(hex::encode(fvk.incoming().as_bytes()))
     }
 
     pub fn generate_address_for_index(&self, account_index: u32) -> Result<AddressResult, String> {
+        // Option 2: SS58 Address = IVK
+        // This ensures that the address displayed in the wallet (and used by senders) matches
+        // the Incoming Viewing Key (IVK) used by the recipient to scan for notes.
+        // Previously, this used sr25519 public key, which caused a mismatch where funds were sent
+        // to an address the recipient wasn't scanning.
+        let address = self.generate_zk_address_for_index(account_index)?;
+        Ok(AddressResult { address })
+    }
+
+    pub fn generate_zk_address_for_index(&self, account_index: u32) -> Result<String, String> {
+        use praph_circuits::keys::SpendingKey;
+
         let guard = self
             .unlocked_seed
             .lock()
@@ -511,11 +535,15 @@ impl WalletState {
             .as_ref()
             .ok_or_else(|| "Wallet is locked".to_string())?;
 
-        let account_bytes = Self::derive_account_id(seed, account_index)?;
+        // Derive SpendingKey -> FVK -> IVK
+        let sk_bytes = Self::derive_account_id(seed, account_index)?;
+        let sk = SpendingKey::from_bytes(sk_bytes);
+        let fvk = sk.derive_full_viewing_key();
+        let ivk = fvk.incoming();
 
-        // PRAPH runtime uses the generic Substrate SS58 prefix 42.
-        let address = ss58check_encode(42, &account_bytes)?;
-        Ok(AddressResult { address })
+        // Encode IVK as SS58 address (prefix 42 for PRAPH)
+        let address = ss58check_encode(42, ivk.as_bytes())?;
+        Ok(address)
     }
 
     pub fn generate_address(&self) -> Result<AddressResult, String> {
@@ -542,6 +570,117 @@ impl WalletState {
         let salt = salt16_from_str(&tx_id);
         let tvk = derive_key_hex(&seed, &salt)?;
         Ok(TvkResult { tvk })
+    }
+
+    /// Derive Ethereum private key for L2 wallet using BIP44: m/44'/60'/0'/0/n
+    /// This uses the standard Ethereum derivation path for compatibility
+    pub fn derive_eth_key(&self, account_index: u32) -> Result<[u8; 32], String> {
+        use bip32::{ChildNumber, XPrv};
+
+        let guard = self
+            .unlocked_seed
+            .lock()
+            .map_err(|_| "Wallet state lock poisoned".to_string())?;
+        let seed = guard
+            .as_ref()
+            .ok_or_else(|| "Wallet is locked".to_string())?;
+
+        if seed.len() < 32 {
+            return Err("Seed too short".to_string());
+        }
+
+        // BIP-44 derivation path for Ethereum: m/44'/60'/0'/0/n
+        // We stored the ENTROPY (32 bytes). But BIP32 needs the 64-byte BIP39 SEED.
+        // Re-derive the seed from entropy.
+        let mnemonic = bip39::Mnemonic::from_entropy(seed)
+            .map_err(|e| format!("Invalid entropy for BIP39: {}", e))?;
+        let bip39_seed = mnemonic.to_seed_normalized("");
+
+        // 60 is Ethereum's registered coin type
+        let root_key =
+            XPrv::new(&bip39_seed).map_err(|e| format!("Failed to create master key: {}", e))?;
+
+        // m/44' (purpose)
+        let purpose =
+            ChildNumber::new(44, true).map_err(|e| format!("Invalid purpose index: {}", e))?;
+        let purpose_key = root_key
+            .derive_child(purpose)
+            .map_err(|e| format!("Failed to derive purpose key: {}", e))?;
+
+        // m/44'/60' (coin type - Ethereum)
+        let coin_type =
+            ChildNumber::new(60, true).map_err(|e| format!("Invalid coin type index: {}", e))?;
+        let coin_key = purpose_key
+            .derive_child(coin_type)
+            .map_err(|e| format!("Failed to derive coin key: {}", e))?;
+
+        // m/44'/60'/0' (account - always 0 for now)
+        let account =
+            ChildNumber::new(0, true).map_err(|e| format!("Invalid account index: {}", e))?;
+        let account_key = coin_key
+            .derive_child(account)
+            .map_err(|e| format!("Failed to derive account key: {}", e))?;
+
+        // m/44'/60'/0'/0 (change - external)
+        let change =
+            ChildNumber::new(0, false).map_err(|e| format!("Invalid change index: {}", e))?;
+        let change_key = account_key
+            .derive_child(change)
+            .map_err(|e| format!("Failed to derive change key: {}", e))?;
+
+        // m/44'/60'/0'/0/n (address index)
+        let address_index = ChildNumber::new(account_index, false)
+            .map_err(|e| format!("Invalid address index: {}", e))?;
+        let final_key = change_key
+            .derive_child(address_index)
+            .map_err(|e| format!("Failed to derive final key: {}", e))?;
+
+        // Extract the 32-byte private key
+        let private_key_bytes = final_key.private_key().to_bytes();
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(&private_key_bytes);
+        Ok(key_bytes)
+    }
+
+    /// Get Ethereum address for L2 wallet
+    /// Returns the checksummed Ethereum address (0x...)
+    pub fn eth_address_for_index(&self, account_index: u32) -> Result<String, String> {
+        use sha3::{Digest, Keccak256};
+
+        let private_key = self.derive_eth_key(account_index)?;
+
+        // Derive public key from private key using secp256k1
+        use bip32::secp256k1::SecretKey;
+        let secret_key = SecretKey::from_slice(&private_key)
+            .map_err(|e| format!("Invalid private key: {}", e))?;
+        let public_key = secret_key.public_key();
+        let public_key_bytes = public_key.to_encoded_point(false);
+        let public_key_bytes = public_key_bytes.as_bytes();
+
+        // Ethereum address = last 20 bytes of Keccak256(public_key[1..65])
+        let hash = Keccak256::digest(&public_key_bytes[1..65]);
+        let address_bytes = &hash[12..32];
+
+        // Checksum encoding (EIP-55)
+        let hex_addr = hex::encode(address_bytes);
+        let checksum_hash = Keccak256::digest(hex_addr.as_bytes());
+        let mut checksummed = String::with_capacity(42);
+        checksummed.push_str("0x");
+
+        for (i, c) in hex_addr.chars().enumerate() {
+            if c.is_ascii_digit() {
+                checksummed.push(c);
+            } else {
+                let nibble = (checksum_hash[i / 2] >> (if i % 2 == 0 { 4 } else { 0 })) & 0xf;
+                if nibble >= 8 {
+                    checksummed.push(c.to_ascii_uppercase());
+                } else {
+                    checksummed.push(c);
+                }
+            }
+        }
+
+        Ok(checksummed)
     }
 }
 

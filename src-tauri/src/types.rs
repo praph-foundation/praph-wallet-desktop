@@ -54,7 +54,7 @@ pub struct SendParams {
     pub to: String,
     pub amount: String,
     pub memo: Option<String>,
-    pub prover_tip: ProverTip,
+    pub prover_tip: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,7 +63,9 @@ pub struct BridgeDepositParams {
     pub l2_address: String,
     pub amount: String,
     pub memo: Option<String>,
-    pub prover_tip: ProverTip,
+    pub prover_tip: String,
+    /// If true, auto-wrap remaining PRAF to wPRAF (keep 0.1 PRAF for gas)
+    pub auto_wrap: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,7 +73,7 @@ pub struct BridgeDepositParams {
 pub struct MintDevFaucetParams {
     pub amount: String,
     pub memo: Option<String>,
-    pub prover_tip: ProverTip,
+    pub prover_tip: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +127,7 @@ pub struct AccountInfo {
     pub index: u32,
     pub name: String,
     pub address: String,
+    pub zk_address: String,
     pub is_active: bool,
 }
 
@@ -176,4 +179,65 @@ pub struct SyncMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct ScanNotesParams {
     pub full_rescan: bool,
+}
+
+// L2 Wallet Types
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct L2Balance {
+    /// Native PRAF balance (for gas)
+    pub praf: String,
+    /// wPRAF token balance
+    pub wpraf: String,
+    /// L2 address (0x...)
+    pub address: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct L2SendParams {
+    /// Recipient address (0x...)
+    pub to: String,
+    /// Amount to send (human readable, e.g., "1.5")
+    pub amount: String,
+    /// Token type: "eth" or "wpraf"
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct L2SendResult {
+    /// Transaction hash
+    pub tx_hash: String,
+    /// Status: "pending", "confirmed", "failed"
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct L2Config {
+    /// L2 RPC URL
+    pub rpc_url: String,
+    /// wPRAF token contract address
+    pub wpraf_address: Option<String>,
+    /// Bridge contract address
+    pub bridge_address: Option<String>,
+    /// Chain ID
+    pub chain_id: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct L2AddressResult {
+    /// L1 PRAPH address (SS58)
+    pub l1_address: String,
+    /// L2 ETH address (0x...)
+    pub l2_address: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FeeEstimates {
+    pub base_fee: u128,
+    pub min_tip_per_action: u128,
+    pub average_tip: u128,
 }

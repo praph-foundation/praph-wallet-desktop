@@ -3,10 +3,12 @@ import { create } from "zustand";
 export type WalletLockState = "locked" | "unlocked";
 export type ThemeMode = "light" | "dark";
 export type SyncStatus = "idle" | "syncing" | "error";
+export type ActiveLayer = "l1" | "l2";
 export interface AccountInfo {
   index: number;
   name: string;
   address: string;
+  zkAddress: string;
   isActive: boolean;
 }
 
@@ -34,6 +36,10 @@ interface WalletState {
   accounts: AccountInfo[];
   activeAccountIndex: number;
 
+  // L2 state
+  activeLayer: ActiveLayer;
+  l2ActiveAccountIndex: number;
+
   setHasWallet: (hasWallet: boolean) => void;
   lock: () => void;
   unlock: () => void;
@@ -42,6 +48,8 @@ interface WalletState {
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
   setSyncStatus: (status: SyncStatus, message?: string | null) => void;
+  setActiveLayer: (layer: ActiveLayer) => void;
+  setL2ActiveAccountIndex: (index: number) => void;
 }
 
 export const useWalletStore = create<WalletState>((set) => ({
@@ -54,6 +62,10 @@ export const useWalletStore = create<WalletState>((set) => ({
 
   accounts: [],
   activeAccountIndex: 0,
+
+  // L2 state
+  activeLayer: "l1",
+  l2ActiveAccountIndex: 0,
 
   setHasWallet: (hasWallet) => set({ hasWallet }),
   lock: () => set({ lockState: "locked" }),
@@ -72,4 +84,6 @@ export const useWalletStore = create<WalletState>((set) => ({
     }),
 
   setSyncStatus: (syncStatus, message = null) => set({ syncStatus, syncMessage: message }),
+  setActiveLayer: (activeLayer) => set({ activeLayer }),
+  setL2ActiveAccountIndex: (l2ActiveAccountIndex) => set({ l2ActiveAccountIndex }),
 }));

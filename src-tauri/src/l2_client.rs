@@ -1,0 +1,303 @@
+//! L2 ETH Client for PRAPH Wallet
+//!
+//! This module provides EVM wallet functionality for the L2 layer:
+//! - ETH balance queries
+//! - wPRAF (wrapped PRAF) token balance
+//! - Transaction sending
+//! - Transaction history
+
+use ethers::prelude::*;
+use ethers::signers::{LocalWallet, Signer};
+use ethers::types::{Address, TransactionRequest, U256};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// L2 client configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L2Config {
+    /// L2 RPC URL (e.g., http://localhost:8545)
+    pub rpc_url: String,
+    /// wPRAF token contract address
+    pub wpraf_address: Option<String>,
+    /// Bridge contract address
+    pub bridge_address: Option<String>,
+    /// Chain ID for L2 network
+    pub chain_id: u64,
+}
+
+impl Default for L2Config {
+    fn default() -> Self {
+        Self {
+            rpc_url: "http://localhost:8545".to_string(),
+            wpraf_address: None,
+            bridge_address: None,
+            chain_id: 1337, // Reth dev chain ID
+        }
+    }
+}
+
+/// L2 balance information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L2Balance {
+    /// Native PRAF balance (for gas)
+    pub praf: String,
+    /// wPRAF token balance
+    pub wpraf: String,
+    /// PRAF balance in minor units (18 decimals)
+    pub praf_minor: String,
+    /// wPRAF balance in minor units (18 decimals)
+    pub wpraf_minor: String,
+}
+
+/// L2 transaction parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L2SendParams {
+    /// Recipient address (0x...)
+    pub to: String,
+    /// Amount to send (human readable, e.g., "1.5")
+    pub amount: String,
+    /// Token type: "eth" or "wpraf"
+    pub token: String,
+    /// Gas price (optional, will use default if not specified)
+    pub gas_price: Option<String>,
+}
+
+/// L2 transaction result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L2SendResult {
+    /// Transaction hash
+    pub tx_hash: String,
+    /// Block number (if confirmed)
+    pub block_number: Option<u64>,
+    /// Status: "pending", "confirmed", "failed"
+    pub status: String,
+}
+
+/// ERC20 ABI for wPRAF token (minimal interface)
+abigen!(
+    IERC20,
+    r#"[
+        function balanceOf(address account) external view returns (uint256)
+        function transfer(address to, uint256 amount) external returns (bool)
+        function approve(address spender, uint256 amount) external returns (bool)
+        function allowance(address owner, address spender) external view returns (uint256)
+        function burn(uint256 amount) external
+        event Transfer(address indexed from, address indexed to, uint256 value)
+    ]"#
+);
+
+/// L2 client for interacting with the EVM layer
+pub struct L2Client {
+    provider: Provider<Http>,
+    config: L2Config,
+}
+
+impl L2Client {
+    /// Create a new L2 client
+    pub fn new(config: L2Config) -> Result<Self, String> {
+        let provider = Provider::<Http>::try_from(&config.rpc_url)
+            .map_err(|e| format!("Failed to create provider: {}", e))?;
+
+        Ok(Self { provider, config })
+    }
+
+    /// Get ETH and wPRAF balances for an address
+    pub async fn get_balance(&self, address: &str) -> Result<L2Balance, String> {
+        let addr: Address = address
+            .parse()
+            .map_err(|e| format!("Invalid address: {}", e))?;
+
+        // Get native ETH balance
+        let eth_balance = self
+            .provider
+            .get_balance(addr, None)
+            .await
+            .map_err(|e| format!("Failed to get ETH balance: {}", e))?;
+
+        // Get wPRAF balance if contract address is configured
+        let wpraf_balance = if let Some(ref wpraf_addr) = self.config.wpraf_address {
+            let contract_addr: Address = wpraf_addr
+                .parse()
+                .map_err(|e| format!("Invalid wPRAF address: {}", e))?;
+            let contract = IERC20::new(contract_addr, Arc::new(self.provider.clone()));
+            contract
+                .balance_of(addr)
+                .call()
+                .await
+                .unwrap_or(U256::zero())
+        } else {
+            U256::zero()
+        };
+
+        Ok(L2Balance {
+            praf: format_units(eth_balance, 18),
+            wpraf: format_units(wpraf_balance, 18),
+            praf_minor: eth_balance.to_string(),
+            wpraf_minor: wpraf_balance.to_string(),
+        })
+    }
+
+    /// Send ETH or wPRAF transaction
+    pub async fn send_transaction(
+        &self,
+        params: L2SendParams,
+        private_key: &[u8; 32],
+    ) -> Result<L2SendResult, String> {
+        let wallet = LocalWallet::from_bytes(private_key)
+            .map_err(|e| format!("Invalid private key: {}", e))?
+            .with_chain_id(self.config.chain_id);
+
+        let client = SignerMiddleware::new(self.provider.clone(), wallet);
+
+        let to: Address = params
+            .to
+            .parse()
+            .map_err(|e| format!("Invalid recipient address: {}", e))?;
+
+        let amount =
+            parse_units(&params.amount, 18).map_err(|e| format!("Invalid amount: {}", e))?;
+
+        let tx_hash = match params.token.as_str() {
+            "praf" => {
+                // Native PRAF transfer
+                let tx = TransactionRequest::new().to(to).value(amount);
+
+                let pending_tx = client
+                    .send_transaction(tx, None)
+                    .await
+                    .map_err(|e| format!("Failed to send PRAF: {}", e))?;
+
+                format!("{:?}", pending_tx.tx_hash())
+            }
+            "wpraf" => {
+                // wPRAF token transfer
+                let wpraf_addr = self
+                    .config
+                    .wpraf_address
+                    .as_ref()
+                    .ok_or("wPRAF contract address not configured")?;
+                let contract_addr: Address = wpraf_addr
+                    .parse()
+                    .map_err(|e| format!("Invalid wPRAF address: {}", e))?;
+
+                let contract = IERC20::new(contract_addr, Arc::new(client));
+                let call = contract.transfer(to, amount.into());
+                let pending_tx = call
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to send wPRAF: {}", e))?;
+
+                format!("{:?}", pending_tx.tx_hash())
+            }
+            _ => return Err(format!("Unknown token type: {}", params.token)),
+        };
+
+        Ok(L2SendResult {
+            tx_hash,
+            block_number: None,
+            status: "pending".to_string(),
+        })
+    }
+
+    /// Burn wPRAF tokens (for L2 -> L1 withdrawal)
+    pub async fn burn_wpraf(
+        &self,
+        amount_str: String,
+        private_key: &[u8; 32],
+    ) -> Result<String, String> {
+        let wallet = LocalWallet::from_bytes(private_key)
+            .map_err(|e| format!("Invalid private key: {}", e))?
+            .with_chain_id(self.config.chain_id);
+
+        let client = SignerMiddleware::new(self.provider.clone(), wallet);
+
+        let wpraf_addr = self
+            .config
+            .wpraf_address
+            .as_ref()
+            .ok_or("wPRAF contract address not configured")?;
+        let contract_addr: Address = wpraf_addr
+            .parse()
+            .map_err(|e| format!("Invalid wPRAF address: {}", e))?;
+
+        let amount_u256 =
+            parse_units(&amount_str, 18).map_err(|e| format!("Invalid amount: {}", e))?;
+
+        let contract = IERC20::new(contract_addr, Arc::new(client));
+        let call = contract.burn(amount_u256);
+        let pending_tx = call
+            .send()
+            .await
+            .map_err(|e| format!("Failed to burn wPRAF: {}", e))?;
+
+        Ok(format!("{:?}", pending_tx.tx_hash()))
+    }
+
+    /// Get the configured L2 config
+    pub fn config(&self) -> &L2Config {
+        &self.config
+    }
+}
+
+/// Format wei to human-readable units
+fn format_units(value: U256, decimals: u32) -> String {
+    let divisor = U256::from(10u64).pow(U256::from(decimals));
+    let whole = value / divisor;
+    let fraction = value % divisor;
+
+    if fraction.is_zero() {
+        format!("{}", whole)
+    } else {
+        let fraction_str = format!("{:0>width$}", fraction, width = decimals as usize);
+        let trimmed = fraction_str.trim_end_matches('0');
+        format!("{}.{}", whole, trimmed)
+    }
+}
+
+/// Parse human-readable units to wei
+fn parse_units(value: &str, decimals: u32) -> Result<U256, String> {
+    let parts: Vec<&str> = value.split('.').collect();
+    match parts.len() {
+        1 => {
+            let whole =
+                U256::from_dec_str(parts[0]).map_err(|e| format!("Invalid number: {}", e))?;
+            let multiplier = U256::from(10u64).pow(U256::from(decimals));
+            Ok(whole * multiplier)
+        }
+        2 => {
+            let whole =
+                U256::from_dec_str(parts[0]).map_err(|e| format!("Invalid whole part: {}", e))?;
+            let frac_str = format!("{:0<width$}", parts[1], width = decimals as usize);
+            let frac_str = &frac_str[..decimals as usize];
+            let frac =
+                U256::from_dec_str(frac_str).map_err(|e| format!("Invalid fraction: {}", e))?;
+            let multiplier = U256::from(10u64).pow(U256::from(decimals));
+            Ok(whole * multiplier + frac)
+        }
+        _ => Err("Invalid number format".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_units() {
+        let one_eth = U256::from(10u64).pow(U256::from(18u32));
+        assert_eq!(format_units(one_eth, 18), "1");
+
+        let one_and_half = one_eth + one_eth / 2;
+        assert_eq!(format_units(one_and_half, 18), "1.5");
+    }
+
+    #[test]
+    fn test_parse_units() {
+        let one_eth = parse_units("1", 18).unwrap();
+        assert_eq!(one_eth, U256::from(10u64).pow(U256::from(18u32)));
+
+        let one_and_half = parse_units("1.5", 18).unwrap();
+        let expected = U256::from(10u64).pow(U256::from(18u32)) * 3 / 2;
+        assert_eq!(one_and_half, expected);
+    }
+}

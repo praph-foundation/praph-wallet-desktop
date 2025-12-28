@@ -9,7 +9,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { useWalletStore } from "../state/walletStore";
-import { Shield, Key, Download, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle } from "lucide-react";
+import { Shield, Key, Download, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle, Copy } from "lucide-react";
 
 type OnboardingStep = "welcome" | "create-password" | "show-mnemonic" | "import-details" | "completing";
 
@@ -116,8 +116,8 @@ export default function OnboardingPage() {
               <Shield className="w-8 h-8 text-primary" />
             </div>
           </div>
-          <CardTitle className="text-3xl font-bold tracking-tight">PRAPH Vault</CardTitle>
-          <CardDescription>Securely manage your ZK-UTXO assets</CardDescription>
+          <CardTitle className="text-3xl font-bold tracking-tight">Praph Wallet</CardTitle>
+          <CardDescription>Securely manage your private assets</CardDescription>
         </CardHeader>
 
         <CardContent className="pt-6">
@@ -203,9 +203,25 @@ export default function OnboardingPage() {
           {step === "show-mnemonic" && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
               <div className="p-4 rounded-xl border-2 border-primary/20 bg-primary/5 space-y-3">
-                <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-                  <Shield className="w-4 h-4" />
-                  Write down these 12 words
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+                    <Shield className="w-4 h-4" />
+                    Write down these 12 words
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-[10px] gap-1.5 hover:bg-primary/10"
+                    onClick={() => {
+                      if (createdMnemonic) {
+                        navigator.clipboard.writeText(createdMnemonic);
+                        toast.success("Mnemonic phrase copied to clipboard");
+                      }
+                    }}
+                  >
+                    <Copy className="w-3 h-3" />
+                    Copy All
+                  </Button>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {createdMnemonic?.split(" ").map((word, i) => (
@@ -295,7 +311,7 @@ export default function OnboardingPage() {
                 </div>
               </div>
               <div className="text-center">
-                <h3 className="text-xl font-bold">Setting up your vault</h3>
+                <h3 className="text-xl font-bold">Setting up your wallet</h3>
                 <p className="text-muted-foreground text-sm max-w-[200px] mx-auto mt-2">
                   Encrypting keys and preparing your secure workspace...
                 </p>
