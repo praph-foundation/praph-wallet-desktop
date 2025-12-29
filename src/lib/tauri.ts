@@ -406,7 +406,7 @@ const mockApi: WalletApi = {
   },
 
   getBalance: async (): Promise<Balance> => {
-    await mockDelay();
+    await sleep(150);
     return {
       total: "100.0000",
       confirmed: "100.0000",
@@ -416,7 +416,7 @@ const mockApi: WalletApi = {
   },
 
   estimateActionCount: async (amount: string, isBridge: boolean): Promise<ActionCountEstimate> => {
-    await mockDelay();
+    await sleep(150);
     // Mock: simulate 2 spends needed for amounts > 50
     const amt = parseFloat(amount);
     const spendCount = amt > 50 ? 2 : 1;
