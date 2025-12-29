@@ -55,7 +55,7 @@ sha3 = "0.10"
 
 # Bridge encryption (Phase 2)
 jsonrpsee = { version = "0.20", features = ["http-client"] }
-ark-bn254 = "0.4"
+ark-bls12-381 = "0.4"
 ark-ec = "0.4"
 ark-ff = "0.4"
 ark-serialize = "0.4"

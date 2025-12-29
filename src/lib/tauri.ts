@@ -69,6 +69,14 @@ export interface BridgeDepositResult {
   txId: string;
 }
 
+export interface ActionCountEstimate {
+  spendCount: number;
+  outputCount: number;
+  changeCount: number;
+  tipCount: number;
+  totalActions: number;
+}
+
 export interface MintDevFaucetParams {
   amount: string;
   memo?: string;

@@ -33,10 +33,26 @@ impl L1RpcClient {
             .await
             .map_err(|e| format!("RPC call failed: {}", e))?;
 
-        // Parse hex-encoded public key
+        // Check for nested error response
+        if let Some(error_obj) = response.get("error") {
+            let error_msg = error_obj
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error");
+            let error_data = error_obj.get("data").and_then(|d| d.as_str()).unwrap_or("");
+
+            return Err(format!(
+                "Bridge key not available: {} ({})\n💡 Bridge requires MPC setup. \
+                For testing, you can use a mock bridge key by setting PRAPH_BRIDGE_TEST_MODE=1",
+                error_msg, error_data
+            ));
+        }
+
+        // Parse bridge_public_key field from response
         let pubkey_hex = response
-            .as_str()
-            .ok_or_else(|| "Invalid response format".to_string())?;
+            .get("bridge_public_key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("Invalid response format: {}", response))?;
 
         let pubkey_bytes = hex::decode(pubkey_hex.trim_start_matches("0x"))
             .map_err(|e| format!("Failed to decode public key: {}", e))?;

@@ -5173,7 +5173,7 @@ dependencies = [
  "aead",
  "aes-gcm",
  "argon2",
- "ark-bn254",
+ "ark-bls12-381",
  "ark-ec",
  "ark-ff",
  "ark-serialize",

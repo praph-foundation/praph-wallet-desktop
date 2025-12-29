@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useMemo, useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, BridgeDepositParams } from "../lib/tauri";
 import { toast } from "sonner";
 import { useWalletStore } from "../state/walletStore";
@@ -29,7 +29,8 @@ import {
   AlertTriangle,
   ExternalLink,
   Clock,
-  Flame // For burn/withdraw
+  Flame, // For burn/withdraw
+  Gauge, // For Network Priority
 } from "lucide-react";
 
 type ProgressStep = "idle" | "preparing" | "proving" | "broadcasting" | "done" | "error";
@@ -37,6 +38,8 @@ type ProgressStep = "idle" | "preparing" | "proving" | "broadcasting" | "done" |
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+const ONE_PRAF_UNITS = 10000;
 
 interface BridgePageProps {
   defaultTab?: "deposit" | "withdraw";
@@ -51,7 +54,8 @@ export default function BridgePage({ defaultTab = "deposit" }: BridgePageProps) 
   const [l2Address, setL2Address] = useState("");
   const [amount, setAmount] = useState("");
   const [memo, setMemo] = useState("");
-  const [proverTip, setProverTip] = useState<BridgeDepositParams["proverTip"]>("medium");
+  const [proverTip, setProverTip] = useState<string>("20"); // Changed to string (minor units)
+  const [selectedSpeed, setSelectedSpeed] = useState<"slow" | "standard" | "fast">("standard");
   const [autoWrap, setAutoWrap] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [progress, setProgress] = useState<ProgressStep>("idle");
@@ -62,6 +66,54 @@ export default function BridgePage({ defaultTab = "deposit" }: BridgePageProps) 
   const [withdrawL1Address, setWithdrawL1Address] = useState("");
   const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
   const [withdrawTxId, setWithdrawTxId] = useState<string | null>(null);
+
+  // Fetch Fee Estimates  
+  const { data: feeEstimates } = useQuery({
+    queryKey: ["feeEstimates"],
+    queryFn: () => api.getFeeEstimates(),
+    staleTime: 60000, // Refresh every minute
+  });
+
+  // Calculate actual action count for bridge transaction
+  // Bridge: 1 spend + 1 change + 1 tip = 3 actions (no recipient output, uses encrypted message instead)
+  const actionCount = useMemo(() => 3, []);
+
+  // Calculate fee options
+  const feeOptions = useMemo(() => {
+    if (!feeEstimates) return null;
+
+    const minRate = feeEstimates.min_tip_per_action;
+    const avgRate = feeEstimates.average_tip;
+
+    const slowTotal = minRate * actionCount;
+    const stdTotal = avgRate * actionCount;
+    const fastTotal = Math.ceil(avgRate * 1.5 * actionCount);
+
+    return {
+      slow: { total: slowTotal.toString(), label: "Slow", desc: `Economy (${actionCount} actions)` },
+      standard: { total: stdTotal.toString(), label: "Standard", desc: `Recommended (${actionCount} actions)` },
+      fast: { total: fastTotal.toString(), label: "Fast", desc: `Priority (${actionCount} actions)` }
+    };
+  }, [feeEstimates, actionCount]);
+
+  // Set initial tip to standard when loaded
+  useEffect(() => {
+    if (feeOptions && selectedSpeed === "standard" && proverTip === "20") {
+      setProverTip(feeOptions.standard.total);
+    }
+  }, [feeOptions]);
+
+  const handleSpeedSelect = (speed: "slow" | "standard" | "fast") => {
+    setSelectedSpeed(speed);
+    if (feeOptions) {
+      setProverTip(feeOptions[speed].total);
+    }
+  };
+
+  const formatPraf = (minor: string) => {
+    const val = parseInt(minor);
+    return (val / ONE_PRAF_UNITS).toFixed(4);
+  };
 
   const isValidL2 = useMemo(() => /^0x[a-fA-F0-9]{40}$/.test(l2Address.trim()), [l2Address]);
   const isValidAmount = useMemo(() => {
@@ -214,23 +266,38 @@ export default function BridgePage({ defaultTab = "deposit" }: BridgePageProps) 
                     </div>
 
                     <div className="space-y-2">
-                      <Label className="text-sm font-semibold px-1">Prover Tip (Priority)</Label>
-                      <div className="grid grid-cols-3 gap-1.5 p-1 rounded-lg bg-background/50 border border-white/5 h-12">
-                        {(["low", "medium", "high"] as const).map((level) => (
-                          <button
-                            key={level}
-                            type="button"
-                            onClick={() => setProverTip(level)}
-                            disabled={loading || progress === "done"}
-                            className={`text-[10px] font-bold uppercase tracking-wider rounded-md transition-all ${proverTip === level
-                              ? "bg-primary text-white shadow-lg shadow-primary/20 scale-[1.05] z-10"
-                              : "text-muted-foreground hover:bg-white/5"
-                              }`}
-                          >
-                            {level}
-                          </button>
-                        ))}
-                      </div>
+                      <Label className="text-sm font-semibold px-1 flex items-center gap-2">
+                        <Gauge className="w-4 h-4 text-amber-500" />
+                        Network Priority
+                      </Label>
+                      {feeOptions ? (
+                        <div className="grid grid-cols-3 gap-2 p-1.5 rounded-lg bg-white/5 border border-white/10">
+                          {(["slow", "standard", "fast"] as const).map((level) => {
+                            const opt = feeOptions[level];
+                            const tipPraf = formatPraf(opt.total);
+                            const isSelected = selectedSpeed === level;
+                            return (
+                              <button
+                                key={level}
+                                type="button"
+                                onClick={() => handleSpeedSelect(level)}
+                                disabled={loading || progress === "done"}
+                                className={`py-2 px-1 flex flex-col items-center justify-center rounded-md transition-all ${isSelected
+                                  ? "bg-gradient-to-b from-primary/20 to-primary/10 border border-primary/50 shadow-[0_0_15px_rgba(var(--primary),0.3)]"
+                                  : "hover:bg-white/5 border border-transparent"
+                                  }`}
+                              >
+                                <span className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 ${isSelected ? "text-primary" : "text-muted-foreground"}`}>{opt.label}</span>
+                                <span className={`text-xs font-mono font-medium ${isSelected ? "text-white" : "text-muted-foreground/70"}`}>{tipPraf}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div className="h-[60px] flex items-center justify-center text-xs text-muted-foreground bg-white/5 rounded-lg">
+                          <Clock className="w-3 h-3 mr-2 animate-spin" /> Calculating fees...
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -457,10 +524,10 @@ export default function BridgePage({ defaultTab = "deposit" }: BridgePageProps) 
                   <div className="text-xl font-black">{amount} <span className="text-xs text-muted-foreground font-normal">PRAF</span></div>
                 </div>
                 <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground opacity-60">Prover Priority</div>
-                  <div className="flex items-center gap-1.5 font-bold text-sm capitalize">
-                    {proverTip === "high" ? <Zap className="w-4 h-4 text-amber-500" /> : <Clock className="w-4 h-4 text-blue-500" />}
-                    {proverTip}
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground opacity-60">Prover Tip</div>
+                  <div className="flex items-center gap-1.5 font-bold text-sm">
+                    <Zap className="w-4 h-4 text-amber-500" />
+                    {formatPraf(proverTip)} PRAF
                   </div>
                 </div>
               </div>

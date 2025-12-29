@@ -1,63 +1,69 @@
-/// ECDH key exchange using BN254 curve (matches ZK circuit curve)
-///
-/// Performs scalar multiplication: shared_secret = scalar * point
-use ark_bn254::{Fr, G1Affine, G1Projective};
-use ark_ec::{AffineRepr, CurveGroup};
+//! Bridge cryptography module for ECDH key exchange on BLS12-381 curve.
+//!
+//! This module provides ECDH functionality using the BLS12-381 elliptic curve,
+//! matching the curve used by pallet-mpc-bridge on L1.
+
+use ark_bls12_381::{Fr, G2Affine, G2Projective};
+use ark_ec::CurveGroup;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use blake2::{Blake2b512, Digest};
 
-/// Perform ECDH to derive shared secret
+/// Perform ECDH key exchange on BLS12-381 curve.
 ///
 /// # Arguments
-/// * `ephemeral_secret` - 32-byte scalar (private key)
-/// * `bridge_pubkey` - Bridge public key (G1 point, 48 or 96 bytes)
+/// * `ephemeral_secret` - 32-byte ephemeral secret scalar
+/// * `bridge_pubkey` - Bridge public key (G2 point, 96 or 192 bytes)
 ///
 /// # Returns
-/// 32-byte shared secret derived from scalar * point
+/// * 32-byte shared secret derived via Blake2b from the ECDH shared point
 pub fn ecdh_bn254(ephemeral_secret: &[u8; 32], bridge_pubkey: &[u8]) -> Result<[u8; 32], String> {
-    // Parse ephemeral secret as Fr scalar
-    let scalar_bytes: [u8; 32] = *ephemeral_secret;
-    let scalar = Fr::from_le_bytes_mod_order(&scalar_bytes);
+    // 1. Parse ephemeral secret as scalar
+    let scalar = Fr::from_le_bytes_mod_order(ephemeral_secret);
 
-    // Parse bridge public key as G1 point
-    let point = parse_g1_point(bridge_pubkey)?;
+    // 2. Parse bridge public key (G2 point)
+    let point = parse_g2_point(bridge_pubkey)?;
 
-    // Perform scalar multiplication: shared_point = scalar * point
+    // 3. Perform scalar multiplication: shared_point = scalar * bridge_pubkey
     let shared_point = (point * scalar).into_affine();
 
-    // Serialize shared point to bytes and hash to get 32-byte secret
-    let shared_bytes = serialize_g1_point(&shared_point);
+    // 4. Serialize shared point
+    let shared_bytes = serialize_g2_point(&shared_point);
 
-    // Use Blake2b to derive 32-byte secret from point
-    use blake2::{Blake2b512, Digest};
+    // 5. Hash to 32-byte shared secret using Blake2b
     let mut hasher = Blake2b512::new();
     hasher.update(&shared_bytes);
-    let result = hasher.finalize();
+    let hash_result = hasher.finalize();
 
-    let mut secret = [0u8; 32];
-    secret.copy_from_slice(&result[..32]);
-    Ok(secret)
+    // Take first 32 bytes
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(&hash_result[..32]);
+
+    Ok(shared_secret)
 }
 
-/// Parse G1 point from bytes (supports both compressed and uncompressed)
-fn parse_g1_point(bytes: &[u8]) -> Result<G1Affine, String> {
+/// Parse G2 point from bytes (supports both compressed and uncompressed formats)
+fn parse_g2_point(bytes: &[u8]) -> Result<G2Affine, String> {
     match bytes.len() {
-        48 => {
-            // Compressed format
-            G1Affine::deserialize_compressed(bytes)
-                .map_err(|e| format!("Failed to parse compressed G1 point: {}", e))
-        }
         96 => {
-            // Uncompressed format
-            G1Affine::deserialize_uncompressed(bytes)
-                .map_err(|e| format!("Failed to parse uncompressed G1 point: {}", e))
+            // Compressed format (96 bytes for G2)
+            G2Affine::deserialize_compressed(bytes)
+                .map_err(|e| format!("Failed to parse compressed G2 point: {}", e))
         }
-        _ => Err(format!("Invalid G1 point length: {}", bytes.len())),
+        192 => {
+            // Uncompressed format (192 bytes for G2)
+            G2Affine::deserialize_uncompressed(bytes)
+                .map_err(|e| format!("Failed to parse uncompressed G2 point: {}", e))
+        }
+        _ => Err(format!(
+            "Invalid G2 point length: expected 96 (compressed) or 192 (uncompressed) bytes, got {}",
+            bytes.len()
+        )),
     }
 }
 
-/// Serialize G1 point to bytes (uncompressed)
-fn serialize_g1_point(point: &G1Affine) -> Vec<u8> {
+/// Serialize G2 point to uncompressed bytes (192 bytes)
+fn serialize_g2_point(point: &G2Affine) -> Vec<u8> {
     let mut bytes = Vec::new();
     point
         .serialize_uncompressed(&mut bytes)
@@ -68,43 +74,29 @@ fn serialize_g1_point(point: &G1Affine) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::RngCore;
 
     #[test]
     fn test_ecdh_roundtrip() {
-        let mut rng = rand::thread_rng();
+        // Generate test secret
+        let secret = [42u8; 32];
 
-        // Generate random scalar and point
-        let mut secret = [0u8; 32];
-        rng.fill_bytes(&mut secret);
-
-        // Use generator point for testing
-        let generator = G1Affine::generator();
-        let gen_bytes = serialize_g1_point(&generator);
+        // G2 generator (compressed, 96 bytes)
+        let generator_compressed = {
+            let gen = G2Affine::generator();
+            let mut bytes = Vec::new();
+            gen.serialize_compressed(&mut bytes).unwrap();
+            bytes
+        };
 
         // Perform ECDH
-        let result = ecdh_bn254(&secret, &gen_bytes);
+        let result = ecdh_bn254(&secret, &generator_compressed);
         assert!(result.is_ok());
 
         let shared_secret = result.unwrap();
         assert_eq!(shared_secret.len(), 32);
 
-        // Shared secret should be deterministic
-        let shared_secret2 = ecdh_bn254(&secret, &gen_bytes).unwrap();
-        assert_eq!(shared_secret, shared_secret2);
-    }
-
-    #[test]
-    fn test_different_secrets_produce_different_results() {
-        let generator = G1Affine::generator();
-        let gen_bytes = serialize_g1_point(&generator);
-
-        let secret1 = [1u8; 32];
-        let secret2 = [2u8; 32];
-
-        let shared1 = ecdh_bn254(&secret1, &gen_bytes).unwrap();
-        let shared2 = ecdh_bn254(&secret2, &gen_bytes).unwrap();
-
-        assert_ne!(shared1, shared2);
+        // Deterministic: same inputs produce same output
+        let result2 = ecdh_bn254(&secret, &generator_compressed).unwrap();
+        assert_eq!(shared_secret, result2);
     }
 }

@@ -375,6 +375,76 @@ pub fn list_transactions_for_active_account(
     db::list_transactions_for_account(&db, &fingerprint, active)
 }
 
+// Estimate action count for fee calculation based on actual UTXO distribution
+#[tauri::command]
+pub fn estimate_action_count(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    amount: String,  // "10 PRAF" or "10"
+    is_bridge: bool, // Bridge doesn't create recipient output
+) -> Result<serde_json::Value, String> {
+    use praph_circuits::keys::SpendingKey;
+
+    let amount_display = if amount.contains(' ') {
+        amount.clone()
+    } else {
+        format!("{} PRAF", amount)
+    };
+
+    let amount_minor_i64 = parse_amount_minor(&amount_display);
+    if amount_minor_i64 <= 0 {
+        return Err("amount must be positive".to_string());
+    }
+    let target_amount = amount_minor_i64 as u128;
+
+    let active_account_index = db::get_active_account_index(&db)?;
+    let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
+    let sk = SpendingKey::from_bytes(spending_key_bytes);
+    let fvk = sk.derive_full_viewing_key();
+    let fingerprint = hex::encode(fvk.fingerprint());
+
+    // Get spendable notes (ordered by amount DESC for efficient coin selection)
+    let notes = db::list_spendable_notes(&db, &fingerprint)?;
+
+    // Simulate coin selection: greedy algorithm (largest first)
+    let mut total_selected: u128 = 0;
+    let mut spend_count = 0;
+
+    for note in notes.iter() {
+        if total_selected >= target_amount {
+            break;
+        }
+        total_selected += note.amount_minor as u128;
+        spend_count += 1;
+    }
+
+    if total_selected < target_amount {
+        return Err(format!(
+            "Insufficient balance: need {} minor units, have {} from {} notes",
+            target_amount, total_selected, spend_count
+        ));
+    }
+
+    // Action breakdown:
+    // - Spends: number of notes consumed
+    // - Output: 1 (recipient) if not bridge, 0 if bridge
+    // - Change: 1 (always needed to return excess)
+    // - Tip: 1 (prover tip action)
+
+    let output_count = if is_bridge { 0 } else { 1 };
+    let change_count = 1;
+    let tip_count = 1;
+    let total_actions = spend_count + output_count + change_count + tip_count;
+
+    Ok(serde_json::json!({
+        "spendCount": spend_count,
+        "outputCount": output_count,
+        "changeCount": change_count,
+        "tipCount": tip_count,
+        "totalActions": total_actions,
+    }))
+}
+
 #[tauri::command]
 pub async fn rescan(
     wallet: tauri::State<'_, WalletState>,
@@ -1236,7 +1306,101 @@ pub async fn send_transaction(
         }
     }
 
-    let encrypted_l2_message = vec![0xFFu8; MAX_ENCRYPTED_MESSAGE_BYTES];
+    // Bridge message encryption
+    let encrypted_l2_message = if is_bridge_deposit {
+        let l2_recipient = params.l2_recipient.as_ref().ok_or("Missing l2_recipient")?;
+
+        eprintln!(
+            "🌉 Starting bridge deposit encryption for L2 address: {}",
+            l2_recipient
+        );
+
+        // 1. Query bridge public key from L1
+        let l1_rpc_url = db::get_l1_rpc_url(&db)?;
+        eprintln!("🔗 Querying bridge public key from L1 RPC: {}", l1_rpc_url);
+
+        let rpc_client = crate::rpc_client::L1RpcClient::new(&l1_rpc_url)
+            .map_err(|e| format!("Failed to create RPC client: {}", e))?;
+
+        let bridge_pubkey = rpc_client
+            .query_bridge_public_key()
+            .await
+            .map_err(|e| format!("Failed to query bridge public key: {}", e))?;
+
+        eprintln!(
+            "✅ Bridge public key retrieved: {} bytes",
+            bridge_pubkey.len()
+        );
+
+        // 2. Generate ephemeral secret for ECDH
+        let mut ephemeral_secret = [0u8; 32];
+        rng.fill_bytes(&mut ephemeral_secret);
+
+        // 3. Perform ECDH to derive shared secret
+        let shared_secret = crate::bridge_crypto::ecdh_bn254(&ephemeral_secret, &bridge_pubkey)
+            .map_err(|e| format!("ECDH failed: {}", e))?;
+
+        // 4. Prepare L2 message: l2_recipient (20 bytes) + amount (16 bytes)
+        let mut l2_message = Vec::new();
+
+        // Parse L2 recipient (EVM address - 20 bytes)
+        let l2_addr_bytes = if l2_recipient.starts_with("0x") {
+            hex::decode(&l2_recipient[2..]).map_err(|e| format!("Invalid L2 address hex: {}", e))?
+        } else {
+            hex::decode(l2_recipient).map_err(|e| format!("Invalid L2 address hex: {}", e))?
+        };
+
+        if l2_addr_bytes.len() != 20 {
+            return Err(format!(
+                "Invalid L2 address length: expected 20 bytes, got {}",
+                l2_addr_bytes.len()
+            ));
+        }
+
+        l2_message.extend_from_slice(&l2_addr_bytes); // 20 bytes
+        l2_message.extend_from_slice(&amount_minor_u128.to_le_bytes()); // 16 bytes
+
+        // 5. Encrypt with ChaCha20Poly1305 using shared secret
+        use chacha20poly1305::{
+            aead::{Aead, KeyInit},
+            ChaCha20Poly1305, Nonce,
+        };
+
+        let cipher = ChaCha20Poly1305::new_from_slice(&shared_secret)
+            .map_err(|e| format!("Failed to create cipher: {}", e))?;
+
+        let mut nonce_bytes = [0u8; 12];
+        rng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher
+            .encrypt(nonce, l2_message.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+
+        // 6. Build final encrypted message: nonce (12) + ciphertext (36 + 16 tag)
+        let mut encrypted_msg = Vec::new();
+        encrypted_msg.extend_from_slice(&nonce_bytes);
+        encrypted_msg.extend_from_slice(&ciphertext);
+
+        // Pad to MAX_ENCRYPTED_MESSAGE_BYTES
+        encrypted_msg.resize(MAX_ENCRYPTED_MESSAGE_BYTES, 0);
+
+        eprintln!(
+            "✅ Bridge message encrypted: {} bytes total (nonce: 12, ciphertext: {})",
+            encrypted_msg.len(),
+            ciphertext.len()
+        );
+        eprintln!(
+            "📦 L2 Message: address={}, amount={} minor units",
+            l2_recipient, amount_minor_u128
+        );
+
+        encrypted_msg
+    } else {
+        // Normal transaction - no L2 message
+        vec![0xFFu8; MAX_ENCRYPTED_MESSAGE_BYTES]
+    };
+
     let mut public_inputs = ClientPublicInputs {
         commitment_root: commitment_root_fr,
         nullifier_root: nullifier_root_fr,
@@ -1470,7 +1634,10 @@ pub async fn send_transaction(
         })
         .to_string();
 
-        let fee_str = format!("{} PRAF", prover_tip_amount);
+        let fee_str = format!(
+            "{:.4} PRAF",
+            prover_tip_amount as f64 / 1_000_000_000_000_000_000.0
+        );
         db::insert_outgoing(
             &db,
             tx_id.clone(),
@@ -1624,7 +1791,10 @@ pub async fn send_transaction(
     // Insert outgoing transaction and poll for confirmation (skip for bridge deposits - already done above)
     if !is_bridge_deposit {
         let output_commitment_bytes = fr_to_bytes(&output_commitments[0]);
-        let fee_str = format!("{} PRAF", prover_tip_amount);
+        let fee_str = format!(
+            "{:.4} PRAF",
+            prover_tip_amount as f64 / 1_000_000_000_000_000_000.0
+        );
 
         db::insert_outgoing(
             &db,
@@ -1634,8 +1804,8 @@ pub async fn send_transaction(
             fee_str,
             params.memo.clone(),
             "pending",
-            Some(nullifier_hexs),
-            Some(&params.to), // Recipient SS58 address
+            Some(nullifier_hexs.clone()), // Clone to avoid move
+            Some(&params.to),             // Recipient SS58 address
         )?;
 
         // Note: We don't mark notes as spent here. They will be marked as spent
@@ -1686,6 +1856,75 @@ pub async fn send_transaction(
             eprintln!(
                 "⚠️  Tx hash polling timeout after {} attempts for tx {}",
                 max_attempts, tx_id_clone
+            );
+        });
+    }
+
+    // Record bridge deposit transaction in database
+    if is_bridge_deposit {
+        let l2_recipient = params.l2_recipient.as_ref().unwrap();
+        let fee_str = format!(
+            "{:.4} PRAF",
+            prover_tip_amount as f64 / 1_000_000_000_000_000_000.0
+        );
+
+        db::insert_outgoing(
+            &db, // Use db directly (no longer escapes to tokio::spawn)
+            tx_id.clone(),
+            active_account_index,
+            amount_display.clone(),
+            fee_str.clone(),
+            params.memo.clone(),
+            "pending",
+            Some(nullifier_hexs.clone()),
+            Some(l2_recipient),
+        )?;
+
+        eprintln!(
+            "✅ Bridge deposit recorded: amount={}, fee={}, L2={}",
+            amount_display, fee_str, l2_recipient
+        );
+
+        // Poll for tx_hash in background (same pattern as normal transactions)
+        let helper_url_clone = helper_url.clone();
+        let tx_id_clone = tx_id.clone();
+        let output_commitment_hex = hex::encode(fr_to_bytes(&output_commitments[0]));
+        let db_path_clone = db.db_path.clone(); // Clone db_path instead of db
+
+        tokio::spawn(async move {
+            let db_clone = DbState {
+                db_path: db_path_clone,
+            };
+            let http = reqwest::Client::new();
+            let max_attempts = 30;
+
+            for attempt in 1..=max_attempts {
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                let request = HelperRequest::GetCommitmentStatus {
+                    commitment: output_commitment_hex.clone(),
+                };
+
+                if let Ok(resp) = http.post(&helper_url_clone).json(&request).send().await {
+                    if let Ok(helper_resp) = resp.json::<HelperResponse>().await {
+                        if let HelperResponse::CommitmentStatusResult {
+                            tx_hash: Some(hash),
+                            ..
+                        } = helper_resp
+                        {
+                            eprintln!(
+                                "✅ Bridge tx confirmed after {} attempts: {}",
+                                attempt, hash
+                            );
+                            let _ = db::update_outgoing_tx_hash(&db_clone, &tx_id_clone, &hash);
+                            return;
+                        }
+                    }
+                }
+            }
+            eprintln!(
+                "⚠️  Bridge tx polling timeout after {} attempts",
+                max_attempts
             );
         });
     }

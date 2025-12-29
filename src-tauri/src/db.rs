@@ -1051,7 +1051,7 @@ pub fn set_bridge_address(db: &DbState, address: String) -> Result<(), String> {
 
 // L1 RPC Settings (for bridge public key query)
 pub fn get_l1_rpc_url(db: &DbState) -> Result<String, String> {
-    Ok(get_setting(db, "l1_rpc_url")?.unwrap_or_else(|| "http://localhost:9944".to_string()))
+    Ok(get_setting(db, "l1_rpc_url")?.unwrap_or_else(|| "http://localhost:9933".to_string()))
 }
 
 pub fn set_l1_rpc_url(db: &DbState, url: String) -> Result<(), String> {

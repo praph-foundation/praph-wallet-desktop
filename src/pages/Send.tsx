@@ -28,12 +28,11 @@ import {
 
 type ProgressStep = "idle" | "preparing" | "proving" | "broadcasting" | "done" | "error";
 
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Assumed Action Count (Input+Output+Change+Tip). Usually 4.
-const ESTIMATED_ACTIONS = 4;
 const ONE_PRAF_UNITS = 10000;
 
 export default function SendPage() {
@@ -66,6 +65,10 @@ export default function SendPage() {
     staleTime: 60000, // Refresh every minute
   });
 
+  // Calculate actual action count for this transaction
+  // Send transaction: 1 spend + 1 output + 1 change + 1 tip = 4 actions
+  const actionCount = useMemo(() => 4, []);
+
   // Calculate options based on estimates
   const feeOptions = useMemo(() => {
     if (!feeEstimates) return null;
@@ -78,16 +81,16 @@ export default function SendPage() {
     const minRate = feeEstimates.min_tip_per_action;
     const avgRate = feeEstimates.average_tip;
 
-    const slowTotal = minRate * ESTIMATED_ACTIONS;
-    const stdTotal = avgRate * ESTIMATED_ACTIONS;
-    const fastTotal = Math.ceil(avgRate * 1.5 * ESTIMATED_ACTIONS);
+    const slowTotal = minRate * actionCount;
+    const stdTotal = avgRate * actionCount;
+    const fastTotal = Math.ceil(avgRate * 1.5 * actionCount);
 
     return {
-      slow: { total: slowTotal.toString(), label: "Slow", desc: "Economy" },
-      standard: { total: stdTotal.toString(), label: "Standard", desc: "Recommended" },
-      fast: { total: fastTotal.toString(), label: "Fast", desc: "Priority" }
+      slow: { total: slowTotal.toString(), label: "Slow", desc: `Economy (${actionCount} actions)` },
+      standard: { total: stdTotal.toString(), label: "Standard", desc: `Recommended (${actionCount} actions)` },
+      fast: { total: fastTotal.toString(), label: "Fast", desc: `Priority (${actionCount} actions)` }
     };
-  }, [feeEstimates]);
+  }, [feeEstimates, actionCount]);
 
   // Set initial tip to standard when loaded
   useEffect(() => {

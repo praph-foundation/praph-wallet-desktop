@@ -81,6 +81,7 @@ pub fn run() {
             commands::wallet_lock,
             commands::wallet_logout,
             commands::get_balance,
+            commands::estimate_action_count, // UTXO-based fee calculation
             commands::list_transactions,
             commands::list_transactions_for_active_account,
             commands::rescan,
