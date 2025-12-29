@@ -227,7 +227,9 @@ interface WalletApi {
   debugProbeSeedEntriesVerbose: () => Promise<Record<string, string[]>>;
   debugKeychainRoundtrip: () => Promise<string>;
   debugWalletSeedStorageStatus: () => Promise<Record<string, unknown>>;
+  // Transaction and balance operations
   getBalance: () => Promise<Balance>;
+  estimateActionCount: (amount: string, isBridge: boolean) => Promise<ActionCountEstimate>;
   listTransactions: () => Promise<TxSummary[]>;
   listTransactionsForActiveAccount: () => Promise<TxSummary[]>;
   rescan: () => Promise<void>;
@@ -280,6 +282,8 @@ const tauriApi: WalletApi = {
   debugWalletSeedStorageStatus: () => invoke("debug_wallet_seed_storage_status"),
 
   getBalance: () => invokeSafe<Balance>("get_balance"),
+  estimateActionCount: (amount: string, isBridge: boolean) =>
+    invokeSafe<ActionCountEstimate>("estimate_action_count", { amount, isBridge }),
   listTransactions: () => invokeSafe<TxSummary[]>("list_transactions"),
   listTransactionsForActiveAccount: () =>
     invokeSafe<TxSummary[]>("list_transactions_for_active_account"),
@@ -402,8 +406,30 @@ const mockApi: WalletApi = {
   },
 
   getBalance: async (): Promise<Balance> => {
-    await sleep(150);
-    return mockBalance;
+    await mockDelay();
+    return {
+      total: "100.0000",
+      confirmed: "100.0000",
+      pending: "0.0000",
+      unspent: "100.0000",
+    };
+  },
+
+  estimateActionCount: async (amount: string, isBridge: boolean): Promise<ActionCountEstimate> => {
+    await mockDelay();
+    // Mock: simulate 2 spends needed for amounts > 50
+    const amt = parseFloat(amount);
+    const spendCount = amt > 50 ? 2 : 1;
+    const outputCount = isBridge ? 0 : 1;
+    const changeCount = 1;
+    const tipCount = 1;
+    return {
+      spendCount,
+      outputCount,
+      changeCount,
+      tipCount,
+      totalActions: spendCount + outputCount + changeCount + tipCount,
+    };
   },
 
   listTransactions: async (): Promise<TxSummary[]> => {

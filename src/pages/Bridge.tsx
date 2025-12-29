@@ -74,9 +74,26 @@ export default function BridgePage({ defaultTab = "deposit" }: BridgePageProps) 
     staleTime: 60000, // Refresh every minute
   });
 
-  // Calculate actual action count for bridge transaction
-  // Bridge: 1 spend + 1 change + 1 tip = 3 actions (no recipient output, uses encrypted message instead)
-  const actionCount = useMemo(() => 3, []);
+  // Calculate actual action count based on UTXO distribution
+  const { data: actionEstimate } = useQuery({
+    queryKey: ["actionCount", amount, true], // true = bridge
+    queryFn: async () => {
+      if (!amount || parseFloat(amount) === 0) return null;
+      return api.estimateActionCount(amount, true);
+    },
+    enabled: !!amount && parseFloat(amount) > 0,
+    staleTime: 10000, // Cache for 10 seconds
+  });
+
+  // Use estimated action count if available, otherwise fallback to default 3
+  // Bridge: spend + change + tip = 3 actions (no recipient output)
+  const actionCount = useMemo(() => {
+    if (actionEstimate?.totalActions) {
+      return actionEstimate.totalActions;
+    }
+    // Default: 1 spend + 1 change + 1 tip = 3 actions
+    return 3;
+  }, [actionEstimate]);
 
   // Calculate fee options
   const feeOptions = useMemo(() => {

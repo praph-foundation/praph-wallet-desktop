@@ -65,9 +65,25 @@ export default function SendPage() {
     staleTime: 60000, // Refresh every minute
   });
 
-  // Calculate actual action count for this transaction
-  // Send transaction: 1 spend + 1 output + 1 change + 1 tip = 4 actions
-  const actionCount = useMemo(() => 4, []);
+  // Calculate actual action count based on UTXO distribution
+  const { data: actionEstimate } = useQuery({
+    queryKey: ["actionCount", amount, false], // false = not bridge
+    queryFn: async () => {
+      if (!amount || parseFloat(amount) === 0) return null;
+      return api.estimateActionCount(amount, false);
+    },
+    enabled: !!amount && parseFloat(amount) > 0,
+    staleTime: 10000, // Cache for 10 seconds
+  });
+
+  // Use estimated action count if available, otherwise fallback to default 4
+  const actionCount = useMemo(() => {
+    if (actionEstimate?.totalActions) {
+      return actionEstimate.totalActions;
+    }
+    // Default: 1 spend + 1 output + 1 change + 1 tip = 4 actions
+    return 4;
+  }, [actionEstimate]);
 
   // Calculate options based on estimates
   const feeOptions = useMemo(() => {
