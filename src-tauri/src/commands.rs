@@ -1694,6 +1694,39 @@ pub async fn send_transaction(
 }
 
 #[tauri::command]
+pub async fn bridge_deposit(
+    app: tauri::AppHandle,
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    params: BridgeDepositParams,
+) -> Result<BridgeDepositResult, String> {
+    eprintln!("🌉 ========== BRIDGE_DEPOSIT CALLED ==========");
+    eprintln!("📊 L2 Address: {}", params.l2_address);
+    eprintln!("💰 Amount: {}", params.amount);
+
+    // Bridge deposit is a send_transaction with l2_recipient set
+    let send_params = SendParams {
+        to: String::new(), // Dummy - will create change output only
+        amount: params.amount,
+        memo: params.memo,
+        prover_tip: params.prover_tip,
+        l2_recipient: Some(params.l2_address),
+    };
+
+    eprintln!("📤 Calling send_transaction...");
+    let result = send_transaction(app, wallet, db, send_params).await;
+
+    match &result {
+        Ok(r) => eprintln!("✅ Bridge deposit succeeded, tx_id: {}", r.tx_id),
+        Err(e) => eprintln!("❌ Bridge deposit failed: {}", e),
+    }
+
+    Ok(BridgeDepositResult {
+        tx_id: result?.tx_id,
+    })
+}
+
+#[tauri::command]
 pub async fn mint_dev_faucet(
     app: tauri::AppHandle,
     wallet: tauri::State<'_, WalletState>,
@@ -1941,36 +1974,6 @@ pub async fn mint_dev_faucet(
     });
 
     Ok(MintDevFaucetResult { tx_id })
-}
-
-#[tauri::command]
-pub fn bridge_deposit(
-    db: tauri::State<'_, DbState>,
-    params: BridgeDepositParams,
-) -> Result<BridgeDepositResult, String> {
-    let tx_id = db::random_id("bridge");
-    let amount = if params.amount.contains(' ') {
-        params.amount
-    } else {
-        format!("{} PRAF", params.amount)
-    };
-    let fee = "0.0200 PRAF".to_string();
-    let memo = params
-        .memo
-        .map(|m| format!("L2: {} · {m}", params.l2_address));
-    // Bridge deposit is currently account-agnostic; treat it as account 0.
-    db::insert_outgoing(
-        &db,
-        tx_id.clone(),
-        0,
-        amount,
-        fee,
-        memo,
-        "pending",
-        None,
-        Some(&params.l2_address),
-    )?;
-    Ok(BridgeDepositResult { tx_id })
 }
 
 #[tauri::command]

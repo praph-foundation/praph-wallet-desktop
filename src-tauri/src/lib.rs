@@ -1,9 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use std::sync::Mutex;
 
+mod bridge_crypto;
 mod commands;
 mod db;
 pub mod l2_client;
+mod rpc_client;
 mod types;
 mod wallet;
 
