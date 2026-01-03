@@ -57,10 +57,13 @@ impl L1RpcClient {
         let pubkey_bytes = hex::decode(pubkey_hex.trim_start_matches("0x"))
             .map_err(|e| format!("Failed to decode public key: {}", e))?;
 
-        // Validate length (BLS12-381 G1 compressed point is 48 bytes, or 96 for uncompressed)
-        if pubkey_bytes.len() != 48 && pubkey_bytes.len() != 96 {
+        // Validate length:
+        // - BLS12-381 G1: 48 bytes (compressed), 96 bytes (uncompressed)
+        // - BLS12-381 G2: 96 bytes (compressed), 192 bytes (uncompressed)
+        // The bridge currently uses uncompressed G2 keys (192 bytes)
+        if pubkey_bytes.len() != 48 && pubkey_bytes.len() != 96 && pubkey_bytes.len() != 192 {
             return Err(format!(
-                "Invalid public key length: expected 48 or 96 bytes, got {}",
+                "Invalid public key length: expected 48, 96 or 192 bytes, got {}",
                 pubkey_bytes.len()
             ));
         }
