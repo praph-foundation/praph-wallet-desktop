@@ -2750,7 +2750,11 @@ pub async fn send_l2_transaction(
 pub fn get_l2_config(db: tauri::State<'_, DbState>) -> Result<L2Config, String> {
     let rpc_url = db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
     let wpraf_address = db::get_wpraf_address(&db).ok();
-    let bridge_address = db::get_bridge_address(&db).ok();
+    // Use deterministic bridge address if not set in DB
+    // This matches the address from E2E tests (nonce=0 deployment from dev account)
+    let bridge_address = db::get_bridge_address(&db)
+        .ok()
+        .or_else(|| Some("0x5FbDB2315678afecb367f032d93f642f64180aa3".to_string()));
 
     Ok(L2Config {
         rpc_url,
