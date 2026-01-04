@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, SendParams, FeeEstimates } from "../lib/tauri";
+import { api, SendParams } from "../lib/tauri";
 import { toast } from "sonner";
 import { useWalletStore } from "../state/walletStore";
 import { Button } from "../components/ui/button";
@@ -17,7 +17,6 @@ import {
 import {
   Send as SendIcon,
   ArrowRight,
-  AlertTriangle,
   Wallet,
   Zap,
   ShieldCheck,
@@ -48,9 +47,7 @@ export default function SendPage() {
   const [proverTip, setProverTip] = useState<string>("20");
   const [selectedSpeed, setSelectedSpeed] = useState<"slow" | "standard" | "fast">("standard");
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [progress, setProgress] = useState<ProgressStep>("idle");
-  const [txId, setTxId] = useState<string | null>(null);
 
   // Fetch accounts for Quick Select dropdown
   const { data: accountsState } = useQuery({
@@ -146,8 +143,7 @@ export default function SendPage() {
       await sleep(400);
       return res;
     },
-    onSuccess: (data) => {
-      setTxId(data.txId);
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["balance"] });
       qc.invalidateQueries({ queryKey: ["transactions"] });
       toast.success("Transaction sent successfully");
@@ -366,12 +362,6 @@ export default function SendPage() {
                     { key: "broadcasting", label: "On-chain Broadcasting", step: 3, icon: SendIcon },
                   ].map((s) => {
                     // Simplified progress logic
-                    const isCurrent = progress === s.key;
-                    const isCompleted = progress === "done" || (progress !== "error" && progress !== s.key && progress !== "idle"); // Simplified
-                    // Wait, better logic needed.
-                    // The existing logic was `progressSteps.indexOf(progress) >= ...`
-                    // But I don't have the array defined here.
-                    // I'll skip detailed progress visual for now or use simplified status text.
                     return <div key={s.key} className="flex items-center gap-2 text-muted-foreground"><s.icon className="w-4 h-4" /> {s.label}</div>
                   })}
                 </div>
