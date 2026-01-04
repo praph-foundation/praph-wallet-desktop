@@ -62,7 +62,6 @@ export interface BridgeDepositParams {
   amount: string;
   memo?: string;
   proverTip: string;
-  autoWrap?: boolean;
 }
 
 export interface BridgeDepositResult {
@@ -143,14 +142,13 @@ export interface TvkResult {
 // L2 Types
 export interface L2Balance {
   praf: string;
-  wpraf: string;
   address: string;
 }
 
 export interface L2SendParams {
   to: string;
   amount: string;
-  token: "praf" | "wpraf";
+  token: "praf";
 }
 
 export interface L2SendResult {
@@ -160,7 +158,6 @@ export interface L2SendResult {
 
 export interface L2Config {
   rpcUrl: string;
-  wprafAddress?: string;
   bridgeAddress?: string;
   chainId: number;
 }
@@ -201,12 +198,7 @@ let mockUnlocked = true;
 let mockHasWallet = true;
 let mockHelperServiceUrl = "http://localhost:8081";
 
-let mockBalance: Balance = {
-  total: "0.0000 PRAF",
-  confirmed: "0.0000 PRAF",
-  pending: "0.0000 PRAF",
-  unspent: "0.0000 PRAF",
-};
+
 
 let mockTxs: TxSummary[] = [];
 
@@ -258,9 +250,9 @@ interface WalletApi {
   sendL2Transaction: (params: L2SendParams) => Promise<L2SendResult>;
   getL2Config: () => Promise<L2Config>;
   setL2RpcUrl: (url: string) => Promise<void>;
-  setWprafAddress: (address: string) => Promise<void>;
+
   setBridgeAddress: (address: string) => Promise<void>;
-  withdrawL2Funds: (amount: string) => Promise<string>;
+
 }
 
 const tauriApi: WalletApi = {
@@ -328,9 +320,8 @@ const tauriApi: WalletApi = {
     invokeSafe<L2SendResult>("send_l2_transaction", { params }),
   getL2Config: () => invokeSafe<L2Config>("get_l2_config"),
   setL2RpcUrl: (url: string) => invokeSafe<void>("set_l2_rpc_url", { url }),
-  setWprafAddress: (address: string) => invokeSafe<void>("set_wpraf_address", { address }),
+
   setBridgeAddress: (address: string) => invokeSafe<void>("set_bridge_address", { address }),
-  withdrawL2Funds: (amount: string) => invokeSafe<string>("withdraw_l2_funds", { amount }),
 };
 
 const mockApi: WalletApi = {
@@ -564,7 +555,7 @@ const mockApi: WalletApi = {
   },
   getL2Balance: async (): Promise<L2Balance> => {
     await sleep(50);
-    return { praf: "0.00", wpraf: "0.00", address: "0x..." };
+    return { praf: "0.00", address: "0x..." };
   },
   sendL2Transaction: async (_params: L2SendParams): Promise<L2SendResult> => {
     await sleep(100);
@@ -577,15 +568,8 @@ const mockApi: WalletApi = {
   setL2RpcUrl: async (_url: string): Promise<void> => {
     await sleep(50);
   },
-  setWprafAddress: async (_address: string): Promise<void> => {
-    await sleep(50);
-  },
   setBridgeAddress: async (_address: string): Promise<void> => {
     await sleep(50);
-  },
-  withdrawL2Funds: async (_amount: string): Promise<string> => {
-    await sleep(100);
-    throw new Error("withdrawL2Funds is only available in backend");
   },
 };
 

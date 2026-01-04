@@ -66,8 +66,7 @@ pub struct BridgeDepositParams {
     pub amount: String,
     pub memo: Option<String>,
     pub prover_tip: String,
-    /// If true, auto-wrap remaining PRAF to wPRAF (keep 0.1 PRAF for gas)
-    pub auto_wrap: Option<bool>,
+
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,8 +188,7 @@ pub struct ScanNotesParams {
 pub struct L2Balance {
     /// Native PRAF balance (for gas)
     pub praf: String,
-    /// wPRAF token balance
-    pub wpraf: String,
+
     /// L2 address (0x...)
     pub address: String,
 }
@@ -220,8 +218,7 @@ pub struct L2SendResult {
 pub struct L2Config {
     /// L2 RPC URL
     pub rpc_url: String,
-    /// wPRAF token contract address
-    pub wpraf_address: Option<String>,
+
     /// Bridge contract address
     pub bridge_address: Option<String>,
     /// Chain ID

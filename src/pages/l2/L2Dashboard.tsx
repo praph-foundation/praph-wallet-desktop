@@ -12,7 +12,6 @@ import CopyButton from "../../components/CopyButton";
 import { Button } from "../../components/ui/button";
 import {
     RefreshCw,
-    Coins,
     Wallet,
     Send,
     ArrowRightLeft,
@@ -84,17 +83,7 @@ export default function L2DashboardPage() {
                     </CardContent>
                 </Card>
 
-                <Card className="bg-purple-500/5 backdrop-blur-sm border-none shadow-md ring-1 ring-purple-500/10 transition-transform hover:scale-[1.02]">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardDescription className="font-medium">wPRAF (ERC-20)</CardDescription>
-                        <Coins className="w-4 h-4 text-purple-400" />
-                    </CardHeader>
-                    <CardContent>
-                        <CardTitle className="text-2xl font-bold">
-                            {l2BalanceQuery.data?.wpraf ?? "-"} <span className="text-sm font-normal text-muted-foreground">wPRAF</span>
-                        </CardTitle>
-                    </CardContent>
-                </Card>
+
             </section>
 
             {/* Quick Actions */}

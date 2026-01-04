@@ -2688,11 +2688,9 @@ pub async fn get_l2_balance(
     // Get L2 RPC URL from settings or use default
     let l2_rpc_url =
         db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let wpraf_address = db::get_wpraf_address(&db).ok();
 
     let config = crate::l2_client::L2Config {
         rpc_url: l2_rpc_url,
-        wpraf_address,
         bridge_address: None,
         chain_id: 1337,
     };
@@ -2702,7 +2700,6 @@ pub async fn get_l2_balance(
 
     Ok(L2Balance {
         praf: balance.praf,
-        wpraf: balance.wpraf,
         address: eth_address,
     })
 }
@@ -2720,11 +2717,9 @@ pub async fn send_l2_transaction(
     // Get L2 config
     let l2_rpc_url =
         db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let wpraf_address = db::get_wpraf_address(&db).ok();
 
     let config = crate::l2_client::L2Config {
         rpc_url: l2_rpc_url,
-        wpraf_address,
         bridge_address: None,
         chain_id: 1337,
     };
@@ -2749,7 +2744,6 @@ pub async fn send_l2_transaction(
 #[tauri::command]
 pub fn get_l2_config(db: tauri::State<'_, DbState>) -> Result<L2Config, String> {
     let rpc_url = db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let wpraf_address = db::get_wpraf_address(&db).ok();
     // Use deterministic bridge address if not set in DB
     // This matches the address from E2E tests (nonce=0 deployment from dev account)
     let bridge_address = db::get_bridge_address(&db)
@@ -2758,7 +2752,6 @@ pub fn get_l2_config(db: tauri::State<'_, DbState>) -> Result<L2Config, String> 
 
     Ok(L2Config {
         rpc_url,
-        wpraf_address,
         bridge_address,
         chain_id: 1337,
     })
@@ -2770,11 +2763,7 @@ pub fn set_l2_rpc_url(db: tauri::State<'_, DbState>, url: String) -> Result<(), 
     db::set_l2_rpc_url(&db, url)
 }
 
-/// Set wPRAF contract address
-#[tauri::command]
-pub fn set_wpraf_address(db: tauri::State<'_, DbState>, address: String) -> Result<(), String> {
-    db::set_wpraf_address(&db, address)
-}
+
 
 /// Set Bridge contract address
 #[tauri::command]
@@ -2782,35 +2771,7 @@ pub fn set_bridge_address(db: tauri::State<'_, DbState>, address: String) -> Res
     db::set_bridge_address(&db, address)
 }
 
-/// Withdraw L2 funds (burn wPRAF)
-#[tauri::command]
-pub async fn withdraw_l2_funds(
-    wallet: tauri::State<'_, WalletState>,
-    db: tauri::State<'_, DbState>,
-    amount: String,
-) -> Result<String, String> {
-    let active = db::get_active_account_index(&db)?;
-    let private_key = wallet.derive_eth_key(active)?;
 
-    // Get L2 config
-    let l2_rpc_url =
-        db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let wpraf_address = db::get_wpraf_address(&db).ok();
-    // Bridge address not needed for burn, but good to have in config
-    let bridge_address = db::get_bridge_address(&db).ok();
-
-    let config = crate::l2_client::L2Config {
-        rpc_url: l2_rpc_url,
-        wpraf_address,
-        bridge_address,
-        chain_id: 1337,
-    };
-
-    let client = crate::l2_client::L2Client::new(config)?;
-    let tx_hash = client.burn_wpraf(amount, &private_key).await?;
-
-    Ok(tx_hash)
-}
 
 #[tauri::command]
 pub async fn get_fee_estimates() -> Result<crate::types::FeeEstimates, String> {

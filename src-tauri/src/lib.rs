@@ -107,9 +107,9 @@ pub fn run() {
             commands::send_l2_transaction,
             commands::get_l2_config,
             commands::set_l2_rpc_url,
-            commands::set_wpraf_address,
+
             commands::set_bridge_address,
-            commands::withdraw_l2_funds,
+
             commands::get_fee_estimates
         ])
         .run(ctx)

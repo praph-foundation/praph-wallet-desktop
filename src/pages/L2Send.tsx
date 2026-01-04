@@ -30,7 +30,6 @@ export default function L2SendPage() {
 
     const [to, setTo] = useState("");
     const [amount, setAmount] = useState("");
-    const [token, setToken] = useState<"praf" | "wpraf">("praf");
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [txId, setTxId] = useState<string | null>(null);
 
@@ -66,7 +65,6 @@ export default function L2SendPage() {
     const resetForm = () => {
         setTo("");
         setAmount("");
-        setToken("praf");
         setTxId(null);
         sendMutation.reset();
     };
@@ -133,25 +131,7 @@ export default function L2SendPage() {
                                     </div>
                                 </div>
 
-                                <div className="space-y-3">
-                                    <Label className="text-sm font-bold text-foreground/90">Token</Label>
-                                    <div className="grid grid-cols-2 gap-2 p-1.5 rounded-lg bg-gradient-to-br from-background/80 to-background/40 border border-white/10">
-                                        {(["praf", "wpraf"] as const).map((t) => (
-                                            <button
-                                                key={t}
-                                                type="button"
-                                                onClick={() => setToken(t)}
-                                                disabled={loading || isDone}
-                                                className={`h-11 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${token === t
-                                                    ? "bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-lg shadow-purple-500/30 scale-[1.02]"
-                                                    : "text-muted-foreground hover:bg-white/10 hover:text-foreground"
-                                                    }`}
-                                            >
-                                                {t === "praf" ? "PRAF" : "wPRAF"}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+
                             </div>
                         </div>
 
@@ -240,7 +220,7 @@ export default function L2SendPage() {
 
                             <div className="p-5 rounded-2xl bg-gradient-to-br from-purple-500/10 to-purple-500/5 border border-purple-500/20 space-y-2 shadow-lg">
                                 <div className="text-[10px] font-bold uppercase tracking-widest text-purple-500/70">Amount</div>
-                                <div className="text-2xl font-black text-purple-500">{amount} <span className="text-sm text-purple-500/60 font-normal">{token.toUpperCase()}</span></div>
+                                <div className="text-2xl font-black text-purple-500">{amount} <span className="text-sm text-purple-500/60 font-normal">PRAF</span></div>
                             </div>
                         </div>
                     </div>
@@ -261,7 +241,7 @@ export default function L2SendPage() {
                                 sendMutation.mutate({
                                     to,
                                     amount,
-                                    token,
+                                    token: "praf",
                                 });
                             }}
                             disabled={loading}

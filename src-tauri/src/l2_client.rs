@@ -17,8 +17,7 @@ use std::sync::Arc;
 pub struct L2Config {
     /// L2 RPC URL (e.g., http://localhost:8545)
     pub rpc_url: String,
-    /// wPRAF token contract address
-    pub wpraf_address: Option<String>,
+
     /// Bridge contract address
     pub bridge_address: Option<String>,
     /// Chain ID for L2 network
@@ -29,7 +28,7 @@ impl Default for L2Config {
     fn default() -> Self {
         Self {
             rpc_url: "http://localhost:8545".to_string(),
-            wpraf_address: None,
+
             bridge_address: None,
             chain_id: 1337, // Reth dev chain ID
         }
@@ -41,12 +40,10 @@ impl Default for L2Config {
 pub struct L2Balance {
     /// Native PRAF balance (for gas)
     pub praf: String,
-    /// wPRAF token balance
-    pub wpraf: String,
+
     /// PRAF balance in minor units (18 decimals)
     pub praf_minor: String,
-    /// wPRAF balance in minor units (18 decimals)
-    pub wpraf_minor: String,
+
 }
 
 /// L2 transaction parameters
@@ -73,18 +70,7 @@ pub struct L2SendResult {
     pub status: String,
 }
 
-/// ERC20 ABI for wPRAF token (minimal interface)
-abigen!(
-    IERC20,
-    r#"[
-        function balanceOf(address account) external view returns (uint256)
-        function transfer(address to, uint256 amount) external returns (bool)
-        function approve(address spender, uint256 amount) external returns (bool)
-        function allowance(address owner, address spender) external view returns (uint256)
-        function burn(uint256 amount) external
-        event Transfer(address indexed from, address indexed to, uint256 value)
-    ]"#
-);
+
 
 /// L2 client for interacting with the EVM layer
 pub struct L2Client {
@@ -101,7 +87,7 @@ impl L2Client {
         Ok(Self { provider, config })
     }
 
-    /// Get ETH and wPRAF balances for an address
+    /// Get PRAF balance for an address
     pub async fn get_balance(&self, address: &str) -> Result<L2Balance, String> {
         let addr: Address = address
             .parse()
@@ -114,30 +100,15 @@ impl L2Client {
             .await
             .map_err(|e| format!("Failed to get ETH balance: {}", e))?;
 
-        // Get wPRAF balance if contract address is configured
-        let wpraf_balance = if let Some(ref wpraf_addr) = self.config.wpraf_address {
-            let contract_addr: Address = wpraf_addr
-                .parse()
-                .map_err(|e| format!("Invalid wPRAF address: {}", e))?;
-            let contract = IERC20::new(contract_addr, Arc::new(self.provider.clone()));
-            contract
-                .balance_of(addr)
-                .call()
-                .await
-                .unwrap_or(U256::zero())
-        } else {
-            U256::zero()
-        };
+
 
         Ok(L2Balance {
             praf: format_units(eth_balance, 18),
-            wpraf: format_units(wpraf_balance, 18),
             praf_minor: eth_balance.to_string(),
-            wpraf_minor: wpraf_balance.to_string(),
         })
     }
 
-    /// Send ETH or wPRAF transaction
+    /// Send PRAF transaction
     pub async fn send_transaction(
         &self,
         params: L2SendParams,
@@ -169,26 +140,7 @@ impl L2Client {
 
                 format!("{:?}", pending_tx.tx_hash())
             }
-            "wpraf" => {
-                // wPRAF token transfer
-                let wpraf_addr = self
-                    .config
-                    .wpraf_address
-                    .as_ref()
-                    .ok_or("wPRAF contract address not configured")?;
-                let contract_addr: Address = wpraf_addr
-                    .parse()
-                    .map_err(|e| format!("Invalid wPRAF address: {}", e))?;
 
-                let contract = IERC20::new(contract_addr, Arc::new(client));
-                let call = contract.transfer(to, amount.into());
-                let pending_tx = call
-                    .send()
-                    .await
-                    .map_err(|e| format!("Failed to send wPRAF: {}", e))?;
-
-                format!("{:?}", pending_tx.tx_hash())
-            }
             _ => return Err(format!("Unknown token type: {}", params.token)),
         };
 
@@ -199,39 +151,7 @@ impl L2Client {
         })
     }
 
-    /// Burn wPRAF tokens (for L2 -> L1 withdrawal)
-    pub async fn burn_wpraf(
-        &self,
-        amount_str: String,
-        private_key: &[u8; 32],
-    ) -> Result<String, String> {
-        let wallet = LocalWallet::from_bytes(private_key)
-            .map_err(|e| format!("Invalid private key: {}", e))?
-            .with_chain_id(self.config.chain_id);
 
-        let client = SignerMiddleware::new(self.provider.clone(), wallet);
-
-        let wpraf_addr = self
-            .config
-            .wpraf_address
-            .as_ref()
-            .ok_or("wPRAF contract address not configured")?;
-        let contract_addr: Address = wpraf_addr
-            .parse()
-            .map_err(|e| format!("Invalid wPRAF address: {}", e))?;
-
-        let amount_u256 =
-            parse_units(&amount_str, 18).map_err(|e| format!("Invalid amount: {}", e))?;
-
-        let contract = IERC20::new(contract_addr, Arc::new(client));
-        let call = contract.burn(amount_u256);
-        let pending_tx = call
-            .send()
-            .await
-            .map_err(|e| format!("Failed to burn wPRAF: {}", e))?;
-
-        Ok(format!("{:?}", pending_tx.tx_hash()))
-    }
 
     /// Get transaction status from L2
     pub async fn get_transaction_status(&self, tx_hash: &str) -> Result<String, String> {

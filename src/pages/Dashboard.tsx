@@ -169,7 +169,7 @@ export default function DashboardPage() {
           { label: "Pending", value: balanceQuery.data?.pending, icon: Clock, color: "text-amber-500" },
           { label: "Unspent Notes", value: balanceQuery.data?.unspent, icon: Inbox, color: "text-blue-500" },
           { label: "L2 PRAF", value: l2BalanceQuery.data?.praf ? `${l2BalanceQuery.data.praf} PRAF` : "-", icon: Wallet, color: "text-purple-500" },
-          { label: "L2 wPRAF", value: l2BalanceQuery.data?.wpraf ? `${l2BalanceQuery.data.wpraf} wPRAF` : "-", icon: Coins, color: "text-purple-400" },
+
         ].map((stat, i) => (
           <Card key={i} className="bg-background/50 backdrop-blur-sm border-none shadow-md ring-1 ring-white/5 transition-transform hover:scale-[1.02]">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
