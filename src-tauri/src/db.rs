@@ -9,7 +9,7 @@ use std::path::PathBuf;
 pub struct NoteRow {
     pub commitment: String,
     pub commitment_index: u64,
-    pub amount_minor: i64,
+    pub amount_minor: u128,
     pub memo: Option<String>,
     pub received_at: u64,
     pub spent: bool,
@@ -34,8 +34,8 @@ pub fn list_transactions_for_account(
         out.push(TxSummary {
             id,
             direction: TxDirection::Incoming,
-            amount: format_amount_minor(n.amount_minor),
-            fee: "0.0000 PRAF".to_string(),
+            amount: format_amount_minor(n.amount_minor as i128),
+            fee: "0.000000000000000000 PRAF".to_string(),
             memo: n.memo.clone(),
             timestamp: n.received_at,
             status: TxStatus::Confirmed,
@@ -106,7 +106,7 @@ pub struct DbState {
 pub struct SpendableNoteRow {
     pub commitment: String,
     pub commitment_index: u64,
-    pub amount_minor: i64,
+    pub amount_minor: u128,
     pub nonce_hex: String,
     pub nullifier_hex: String,
 }
@@ -130,9 +130,9 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
             id TEXT PRIMARY KEY,\
             direction TEXT NOT NULL,\
             amount TEXT NOT NULL,\
-            amount_minor INTEGER NOT NULL,\
+            amount_minor TEXT NOT NULL,\
             fee TEXT NOT NULL,\
-            fee_minor INTEGER NOT NULL,\
+            fee_minor TEXT NOT NULL,\
             memo TEXT,\
             timestamp INTEGER NOT NULL,\
             status TEXT NOT NULL,\
@@ -145,7 +145,7 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
             commitment_index INTEGER NOT NULL,\
             fingerprint TEXT NOT NULL,\
             encrypted_memo TEXT,\
-            amount_minor INTEGER NOT NULL,\
+            amount_minor TEXT NOT NULL,\
             memo TEXT,\
             nonce TEXT,\
             received_at INTEGER NOT NULL,\
@@ -163,18 +163,21 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
 
     // Migration: transactions.account_index for multi-account scoping.
     {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(transactions)")
-            .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-        let mut has_account_index = false;
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            let name: String = row.get(1).map_err(|e| e.to_string())?;
-            if name == "account_index" {
-                has_account_index = true;
-                break;
+        let has_account_index = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(transactions)")
+                .map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            let mut found = false;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let name: String = row.get(1).map_err(|e| e.to_string())?;
+                if name == "account_index" {
+                    found = true;
+                    break;
+                }
             }
-        }
+            found
+        };
         if !has_account_index {
             conn.execute(
                 "ALTER TABLE transactions ADD COLUMN account_index INTEGER NOT NULL DEFAULT 0",
@@ -192,18 +195,21 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
 
     // Migration: transactions.nullifiers for tracking spent nullifiers.
     {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(transactions)")
-            .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-        let mut has_nullifiers = false;
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            let name: String = row.get(1).map_err(|e| e.to_string())?;
-            if name == "nullifiers" {
-                has_nullifiers = true;
-                break;
+        let has_nullifiers = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(transactions)")
+                .map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            let mut found = false;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let name: String = row.get(1).map_err(|e| e.to_string())?;
+                if name == "nullifiers" {
+                    found = true;
+                    break;
+                }
             }
-        }
+            found
+        };
         if !has_nullifiers {
             conn.execute("ALTER TABLE transactions ADD COLUMN nullifiers TEXT", [])
                 .map_err(|e| e.to_string())?;
@@ -213,18 +219,21 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
     // Lightweight migration: older wallets may not have the notes.nonce column.
     // We add it if missing.
     {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(notes)")
-            .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-        let mut has_nonce = false;
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            let name: String = row.get(1).map_err(|e| e.to_string())?;
-            if name == "nonce" {
-                has_nonce = true;
-                break;
+        let has_nonce = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(notes)")
+                .map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            let mut found = false;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let name: String = row.get(1).map_err(|e| e.to_string())?;
+                if name == "nonce" {
+                    found = true;
+                    break;
+                }
             }
-        }
+            found
+        };
         if !has_nonce {
             conn.execute("ALTER TABLE notes ADD COLUMN nonce TEXT", [])
                 .map_err(|e| e.to_string())?;
@@ -233,20 +242,23 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
 
     // Migration: notes.tx_hash and notes.sender
     {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(notes)")
-            .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-        let mut has_tx_hash = false;
-        let mut has_sender = false;
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            let name: String = row.get(1).map_err(|e| e.to_string())?;
-            if name == "tx_hash" {
-                has_tx_hash = true;
-            } else if name == "sender" {
-                has_sender = true;
+        let (has_tx_hash, has_sender) = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(notes)")
+                .map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            let mut found_tx = false;
+            let mut found_sender = false;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let name: String = row.get(1).map_err(|e| e.to_string())?;
+                if name == "tx_hash" {
+                    found_tx = true;
+                } else if name == "sender" {
+                    found_sender = true;
+                }
             }
-        }
+            (found_tx, found_sender)
+        };
         if !has_tx_hash {
             conn.execute("ALTER TABLE notes ADD COLUMN tx_hash TEXT", [])
                 .map_err(|e| e.to_string())?;
@@ -257,31 +269,89 @@ pub fn init_db(db: &DbState) -> Result<(), String> {
         }
     }
 
-    // Migration: transactions.recipient_address for SS58 address storage
+    // Migration: Convert amount_minor and fee_minor to TEXT to support u128.
+    // SQLite allows any type in any column, but we want to ensure consistent string storage.
     {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(transactions)")
-            .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-        let mut has_recipient_address = false;
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            let name: String = row.get(1).map_err(|e| e.to_string())?;
-            if name == "recipient_address" {
-                has_recipient_address = true;
-                break;
+        let notes_amount_is_int = {
+            let mut notes_stmt = conn.prepare("PRAGMA table_info(notes)").map_err(|e| e.to_string())?;
+            let mut notes_rows = notes_stmt.query([]).map_err(|e| e.to_string())?;
+            let mut found = false;
+            while let Some(row) = notes_rows.next().map_err(|e| e.to_string())? {
+                let name: String = row.get(1).map_err(|e| e.to_string())?;
+                let type_name: String = row.get(2).map_err(|e| e.to_string())?;
+                if name == "amount_minor" && type_name.to_uppercase() == "INTEGER" {
+                    found = true;
+                    break;
+                }
             }
+            found
+        };
+        if notes_amount_is_int {
+            println!("Migrating notes.amount_minor from INTEGER to TEXT");
+            conn.execute_batch(
+                "BEGIN TRANSACTION;\
+                 ALTER TABLE notes RENAME TO notes_old;\
+                 CREATE TABLE notes (\
+                    commitment TEXT PRIMARY KEY,\
+                    commitment_index INTEGER NOT NULL,\
+                    fingerprint TEXT NOT NULL,\
+                    encrypted_memo TEXT,\
+                    amount_minor TEXT NOT NULL,\
+                    memo TEXT,\
+                    nonce TEXT,\
+                    received_at INTEGER NOT NULL,\
+                    nullifier TEXT,\
+                    spent INTEGER NOT NULL,\
+                    tx_hash TEXT,\
+                    sender TEXT\
+                 );\
+                 INSERT INTO notes (commitment, commitment_index, fingerprint, encrypted_memo, amount_minor, memo, nonce, received_at, nullifier, spent, tx_hash, sender) \
+                 SELECT commitment, commitment_index, fingerprint, encrypted_memo, CAST(amount_minor AS TEXT), memo, nonce, received_at, nullifier, spent, tx_hash, sender FROM notes_old;\
+                 DROP TABLE notes_old;\
+                 COMMIT;",
+            ).map_err(|e| e.to_string())?;
         }
-        if !has_recipient_address {
-            conn.execute(
-                "ALTER TABLE transactions ADD COLUMN recipient_address TEXT",
-                [],
-            )
-            .map_err(|e| e.to_string())?;
+
+        let tx_amount_is_int = {
+            let mut tx_stmt = conn.prepare("PRAGMA table_info(transactions)").map_err(|e| e.to_string())?;
+            let mut tx_rows = tx_stmt.query([]).map_err(|e| e.to_string())?;
+            let mut found = false;
+            while let Some(row) = tx_rows.next().map_err(|e| e.to_string())? {
+                let name: String = row.get(1).map_err(|e| e.to_string())?;
+                let type_name: String = row.get(2).map_err(|e| e.to_string())?;
+                if name == "amount_minor" && type_name.to_uppercase() == "INTEGER" {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if tx_amount_is_int {
+            println!("Migrating transactions amount/fee from INTEGER to TEXT");
+            conn.execute_batch(
+                "BEGIN TRANSACTION;\
+                 ALTER TABLE transactions RENAME TO transactions_old;\
+                 CREATE TABLE transactions (\
+                    id TEXT PRIMARY KEY,\
+                    direction TEXT NOT NULL,\
+                    amount TEXT NOT NULL,\
+                    amount_minor TEXT NOT NULL,\
+                    fee TEXT NOT NULL,\
+                    fee_minor TEXT NOT NULL,\
+                    memo TEXT,\
+                    timestamp INTEGER NOT NULL,\
+                    status TEXT NOT NULL,\
+                    account_index INTEGER NOT NULL,\
+                    nullifiers TEXT,\
+                    recipient_address TEXT\
+                 );\
+                 INSERT INTO transactions (id, direction, amount, amount_minor, fee, fee_minor, memo, timestamp, status, account_index, nullifiers, recipient_address) \
+                 SELECT id, direction, amount, CAST(amount_minor AS TEXT), fee, CAST(fee_minor AS TEXT), memo, timestamp, status, account_index, nullifiers, recipient_address FROM transactions_old;\
+                 DROP TABLE transactions_old;\
+                 COMMIT;",
+            ).map_err(|e| e.to_string())?;
         }
     }
-
-    // Legacy cleanup: remove demo placeholder transactions if they exist.
-    let _ = conn.execute("DELETE FROM transactions WHERE id LIKE 'tx_demo_%'", []);
 
     Ok(())
 }
@@ -326,46 +396,54 @@ pub fn get_balance(db: &DbState, fingerprint: &str, account_index: u32) -> Resul
     let conn = open_db(db)?;
 
     // Unspent notes: actual spendable balance (UTXO model)
-    let unspent_notes: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM notes WHERE spent=0 AND fingerprint=?1",
-            params![fingerprint],
-            |r| r.get(0),
-        )
+    let mut stmt = conn
+        .prepare("SELECT amount_minor FROM notes WHERE spent=0 AND fingerprint=?1")
         .map_err(|e| e.to_string())?;
+    let unspent_notes: u128 = stmt
+        .query_map(params![fingerprint], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .map(|s| s.parse::<u128>().unwrap_or(0))
+        .sum();
 
     // Pending incoming transactions (not yet reflected in notes)
-    let incoming_pending: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM transactions WHERE account_index=?1 AND direction='incoming' AND status='pending'",
-            params![account_index as i64],
-            |r| r.get(0),
-        )
+    let mut stmt = conn
+        .prepare("SELECT amount_minor FROM transactions WHERE account_index=?1 AND direction='incoming' AND status='pending'")
         .map_err(|e| e.to_string())?;
+    let incoming_pending: u128 = stmt
+        .query_map(params![account_index as i64], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .map(|s| s.parse::<u128>().unwrap_or(0))
+        .sum();
 
     // Pending outgoing transactions that haven't been confirmed yet
-    let outgoing_pending: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(amount_minor + fee_minor), 0) FROM transactions WHERE account_index=?1 AND direction='outgoing' AND status='pending'",
-            params![account_index as i64],
-            |r| r.get(0),
-        )
+    let mut stmt = conn
+        .prepare("SELECT amount_minor, fee_minor FROM transactions WHERE account_index=?1 AND direction='outgoing' AND status='pending'")
         .map_err(|e| e.to_string())?;
+    let outgoing_pending: u128 = stmt
+        .query_map(params![account_index as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .map(|(a, f)| a.parse::<u128>().unwrap_or(0) + f.parse::<u128>().unwrap_or(0))
+        .sum();
 
     // Confirmed balance: settled balance (unspent notes only)
-    let confirmed_balance = unspent_notes;
+    let confirmed_balance = unspent_notes as i128;
 
     // Total balance: confirmed + pending incoming - pending outgoing
-    let total_balance = confirmed_balance + incoming_pending - outgoing_pending;
+    let total_balance = (unspent_notes as i128) + (incoming_pending as i128) - (outgoing_pending as i128);
 
     // Pending shows net pending amount (incoming - outgoing)
-    let pending_balance = incoming_pending - outgoing_pending;
+    let pending_balance = (incoming_pending as i128) - (outgoing_pending as i128);
 
     Ok(Balance {
         total: format_amount_minor(total_balance),
         confirmed: format_amount_minor(confirmed_balance),
         pending: format_amount_minor(pending_balance),
-        unspent: format_amount_minor(unspent_notes),
+        unspent: format_amount_minor(unspent_notes as i128),
     })
 }
 
@@ -382,8 +460,8 @@ pub fn list_transactions(db: &DbState) -> Result<Vec<TxSummary>, String> {
         out.push(TxSummary {
             id,
             direction: TxDirection::Incoming,
-            amount: format_amount_minor(n.amount_minor),
-            fee: "0.0000 PRAF".to_string(),
+            amount: format_amount_minor(n.amount_minor as i128),
+            fee: "0.000000000000000000 PRAF".to_string(),
             memo: n.memo.clone(),
             timestamp: n.received_at,
             status: TxStatus::Confirmed,
@@ -460,10 +538,12 @@ pub fn list_spendable_notes(
 
     let rows = stmt
         .query_map(params![fingerprint], |r| {
+            let amount_str: String = r.get(2)?;
+            let amount_minor = amount_str.parse::<u128>().unwrap_or(0);
             Ok(SpendableNoteRow {
                 commitment: r.get(0)?,
                 commitment_index: r.get::<_, i64>(1)? as u64,
-                amount_minor: r.get(2)?,
+                amount_minor,
                 nonce_hex: r.get(3)?,
                 nullifier_hex: r.get(4)?,
             })
@@ -474,6 +554,8 @@ pub fn list_spendable_notes(
     for row in rows {
         out.push(row.map_err(|e| e.to_string())?);
     }
+    // Since SQL sorting on TEXT is lexicographical, we sort by amount in Rust.
+    out.sort_by(|a, b| b.amount_minor.cmp(&a.amount_minor));
     Ok(out)
 }
 
@@ -520,10 +602,12 @@ pub fn list_notes_for_fingerprint(db: &DbState, fingerprint: &str) -> Result<Vec
 
     let rows = stmt
         .query_map(params![fingerprint], |r| {
+            let amount_str: String = r.get(2)?;
+            let amount_minor = amount_str.parse::<u128>().unwrap_or(0);
             Ok(NoteRow {
                 commitment: r.get(0)?,
                 commitment_index: r.get::<_, i64>(1)? as u64,
-                amount_minor: r.get(2)?,
+                amount_minor,
                 memo: r.get(3)?,
                 received_at: r.get::<_, i64>(4)? as u64,
                 spent: r.get::<_, i64>(5)? != 0,
@@ -658,10 +742,15 @@ pub fn reconstruct_outgoing_transactions(
             .map_err(|e| e.to_string())?;
 
         // Only create synthetic transaction if there's unaccounted outgoing amount
-        let unaccounted = sent_amount - existing_outgoing;
+        let unaccounted = if sent_amount > existing_outgoing {
+             sent_amount - existing_outgoing
+        } else {
+            0
+        };
+
         if unaccounted > 0 {
             let tx_id = format!("recovered_{}", crate::unix_ts());
-            let amount_str = format_amount_minor(unaccounted);
+            let amount_str = format_amount_minor(unaccounted as i128);
             let ts = crate::unix_ts() as i64;
 
             conn.execute(
@@ -671,9 +760,9 @@ pub fn reconstruct_outgoing_transactions(
                     tx_id,
                     "outgoing",
                     amount_str,
-                    unaccounted,
-                    "0.0000 PRAF",
-                    0i64,
+                    unaccounted.to_string(),
+                    "0.000000000000000000 PRAF",
+                    "0",
                     Some("Recovered from rescan"),
                     ts,
                     "confirmed",
@@ -727,9 +816,9 @@ pub fn insert_outgoing(
             tx_id,
             "outgoing",
             amount,
-            amount_minor,
+            amount_minor.to_string(),
             fee,
-            fee_minor,
+            fee_minor.to_string(),
             memo,
             ts,
             status,
@@ -759,7 +848,7 @@ pub fn upsert_note(
     commitment_index: u64,
     fingerprint: &str,
     encrypted_memo_hex: &str,
-    amount_minor: i64,
+    amount_minor: u128,
     memo: Option<&str>,
     nonce: Option<&str>,
     received_at: u64,
@@ -789,7 +878,7 @@ pub fn upsert_note(
             commitment_index as i64,
             fingerprint,
             encrypted_memo_hex,
-            amount_minor,
+            amount_minor.to_string(),
             memo,
             nonce,
             received_at as i64,
@@ -816,7 +905,7 @@ pub fn list_notes(db: &DbState) -> Result<Vec<NoteRow>, String> {
             Ok(NoteRow {
                 commitment: r.get(0)?,
                 commitment_index: r.get::<_, i64>(1)? as u64,
-                amount_minor: r.get(2)?,
+                amount_minor: r.get::<_, String>(2)?.parse().unwrap_or(0),
                 memo: r.get(3)?,
                 received_at: r.get::<_, i64>(4)? as u64,
                 spent: r.get::<_, i64>(5)? != 0,
@@ -833,35 +922,40 @@ pub fn list_notes(db: &DbState) -> Result<Vec<NoteRow>, String> {
     Ok(out)
 }
 
-fn parse_amount_minor(amount: &str) -> i64 {
+fn parse_amount_minor(amount: &str) -> i128 {
     let raw = amount.split_whitespace().next().unwrap_or("0");
     let (whole, frac) = match raw.split_once('.') {
         Some((w, f)) => (w, f),
         None => (raw, ""),
     };
 
-    let sign = if whole.starts_with('-') { -1i64 } else { 1i64 };
+    let sign = if whole.starts_with('-') { -1i128 } else { 1i128 };
     let whole_digits = whole.trim_start_matches('-');
 
-    let whole_value: i64 = whole_digits.parse().unwrap_or(0);
+    let whole_value: i128 = whole_digits.parse().unwrap_or(0);
     let mut frac_digits = frac.to_string();
-    if frac_digits.len() > 4 {
-        frac_digits.truncate(4);
+    if frac_digits.len() > 18 {
+        frac_digits.truncate(18);
     }
-    while frac_digits.len() < 4 {
+    while frac_digits.len() < 18 {
         frac_digits.push('0');
     }
-    let frac_value: i64 = frac_digits.parse().unwrap_or(0);
+    let frac_value: i128 = frac_digits.parse().unwrap_or(0);
 
-    sign * (whole_value * 10_000 + frac_value)
+    sign * (whole_value * 1_000_000_000_000_000_000 + frac_value)
 }
 
-pub fn format_amount_minor(amount_minor: i64) -> String {
+pub fn format_amount_minor(amount_minor: i128) -> String {
+    let abs_amount = amount_minor.abs();
+    let whole = abs_amount / 1_000_000_000_000_000_000;
+    let fraction = abs_amount % 1_000_000_000_000_000_000;
     let sign = if amount_minor < 0 { "-" } else { "" };
-    let v = amount_minor.abs();
-    let whole = v / 10_000;
-    let frac = v % 10_000;
-    format!("{}{whole}.{frac:04} PRAF", sign)
+    let mut fraction_str = format!("{:018}", fraction);
+    // Trim trailing zeros but keep at least 4
+    while fraction_str.ends_with('0') && fraction_str.len() > 4 {
+        fraction_str.pop();
+    }
+    format!("{}{}.{} PRAF", sign, whole, fraction_str)
 }
 
 fn get_setting(db: &DbState, key: &str) -> Result<Option<String>, String> {

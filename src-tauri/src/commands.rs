@@ -2,9 +2,9 @@ use crate::db;
 use crate::db::DbState;
 use crate::types::{
     AccountInfo, AccountsState, AddressResult, AppInfo, Balance, BridgeDepositParams,
-    BridgeDepositResult, MintDevFaucetParams, MintDevFaucetResult, ProverTip, ScanNotesParams,
-    SendParams, SendResult, Settings, SyncMetadata, SyncState, TxSummary, WalletCreateResult,
-    WalletStatus,
+    BridgeDepositResult, BridgeWithdrawParams, BridgeWithdrawResult, MintDevFaucetParams,
+    MintDevFaucetResult, ScanNotesParams, SendParams, SendResult, Settings,
+    SyncMetadata, SyncState, TxSummary, WalletCreateResult, WalletStatus,
 };
 use crate::wallet::WalletState;
 use serde::{Deserialize, Serialize};
@@ -185,27 +185,28 @@ pub fn debug_wallet_seed_storage_status(
     Ok(out)
 }
 
-fn parse_amount_minor(amount: &str) -> i64 {
+fn parse_amount_minor(amount: &str) -> u128 {
     let raw = amount.split_whitespace().next().unwrap_or("0");
     let (whole, frac) = match raw.split_once('.') {
         Some((w, f)) => (w, f),
         None => (raw, ""),
     };
 
-    let sign = if whole.starts_with('-') { -1i64 } else { 1i64 };
+    // Note: ZK-UTXO amounts are always non-negative in the core logic,
+    // but we handle sign cautiously if needed by the UI.
     let whole_digits = whole.trim_start_matches('-');
 
-    let whole_value: i64 = whole_digits.parse().unwrap_or(0);
+    let whole_value: u128 = whole_digits.parse().unwrap_or(0);
     let mut frac_digits = frac.to_string();
-    if frac_digits.len() > 4 {
-        frac_digits.truncate(4);
+    if frac_digits.len() > 18 {
+        frac_digits.truncate(18);
     }
-    while frac_digits.len() < 4 {
+    while frac_digits.len() < 18 {
         frac_digits.push('0');
     }
-    let frac_value: i64 = frac_digits.parse().unwrap_or(0);
+    let frac_value: u128 = frac_digits.parse().unwrap_or(0);
 
-    sign * (whole_value * 10_000 + frac_value)
+    whole_value * 1_000_000_000_000_000_000 + frac_value
 }
 
 fn parse_hex_32(s: &str) -> Result<[u8; 32], String> {
@@ -347,7 +348,6 @@ async fn get_state_roots_from_node(rpc_url: &str) -> Result<([u8; 32], [u8; 32])
 }
 
 #[tauri::command]
-
 pub async fn get_balance(
     wallet: tauri::State<'_, WalletState>,
     db: tauri::State<'_, DbState>,
@@ -391,11 +391,11 @@ pub fn estimate_action_count(
         format!("{} PRAF", amount)
     };
 
-    let amount_minor_i64 = parse_amount_minor(&amount_display);
-    if amount_minor_i64 <= 0 {
+    let amount_minor = parse_amount_minor(&amount_display);
+    if amount_minor == 0 {
         return Err("amount must be positive".to_string());
     }
-    let target_amount = amount_minor_i64 as u128;
+    let target_amount = amount_minor;
 
     let active_account_index = db::get_active_account_index(&db)?;
     let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
@@ -807,19 +807,13 @@ async fn scan_notes_impl(
             _ => false,
         };
 
-        let amount_minor = if amount > i64::MAX as u128 {
-            i64::MAX
-        } else {
-            amount as i64
-        };
-
         db::upsert_note(
             db,
             &note.commitment,
             note.commitment_index,
             &fingerprint_hex,
             &enc_hex,
-            amount_minor,
+            amount, // Already u128
             memo_str.as_deref(),
             Some(&note_nonce_hex),
             now,
@@ -1054,11 +1048,11 @@ pub async fn send_transaction(
     } else {
         format!("{} PRAF", params.amount)
     };
-    let amount_minor_i64 = parse_amount_minor(&amount_display);
-    if amount_minor_i64 <= 0 {
+    let amount_minor = parse_amount_minor(&amount_display);
+    if amount_minor == 0 {
         return Err("amount must be positive".to_string());
     }
-    let amount_minor_u128 = amount_minor_i64 as u128;
+    let amount_minor_u128 = amount_minor;
 
     let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
     let sender_sk = SpendingKey::from_bytes(spending_key_bytes);
@@ -1081,7 +1075,7 @@ pub async fn send_transaction(
 
     // Parse prover tip amount (raw minor units string)
     let prover_tip_amount: u128 = params.prover_tip.parse().unwrap_or(0);
-    let prover_tip_i64 = prover_tip_amount as i64;
+
 
     // Fetch prover address from prover service
     let prover_url = std::env::var("PRAPH_PROVER_SERVICE_URL")
@@ -1114,9 +1108,9 @@ pub async fn send_transaction(
 
     let spendable = db::list_spendable_notes(&db, &sender_fingerprint)?;
     let mut selected = Vec::new();
-    let mut total_selected: i64 = 0;
+    let mut total_selected: u128 = 0;
     // We must select enough for Amount + Tip
-    let target_amount = amount_minor_i64 + prover_tip_i64;
+    let target_amount = amount_minor_u128 + prover_tip_amount;
 
     for n in spendable {
         if total_selected >= target_amount {
@@ -1128,18 +1122,13 @@ pub async fn send_transaction(
     if total_selected < target_amount {
         return Err(format!(
             "insufficient balance: have {}, need {} (amount {} + tip {})",
-            total_selected, target_amount, amount_minor_i64, prover_tip_i64
+            total_selected, target_amount, amount_minor_u128, prover_tip_amount
         ));
     }
 
     // Calculate actual change amount early (needed for OutputAction creation)
     // total_selected - amount - tip
-    let change_amount_minor: i64 = total_selected - amount_minor_i64 - prover_tip_i64;
-    let change_amount_u128: u128 = if change_amount_minor <= 0 {
-        0
-    } else {
-        change_amount_minor as u128
-    };
+    let change_amount_u128: u128 = total_selected.saturating_sub(amount_minor_u128).saturating_sub(prover_tip_amount);
 
     // Get state roots directly from L1 node (not helper) to avoid sync lag
     let rpc_url = db::get_node_rpc_url(&db)?;
@@ -1225,30 +1214,39 @@ pub async fn send_transaction(
     }
 
     let mut rng = ChaCha20Rng::from_entropy();
+    
+    // Derive recipient IVK from address (same as praph-cli)
+    use sp_core::crypto::{Ss58Codec, AccountId32};
+    
+    let to_account = AccountId32::from_ss58check(&params.to)
+        .map_err(|e| format!("Invalid SS58 address: {}", e))?;
+    
+    // AccountId32 is [u8; 32], use it directly as IVK
+    let to_ivk_bytes: [u8; 32] = *to_account.as_ref();
+    let to_ivk = IncomingViewingKey::from_bytes(to_ivk_bytes);
+    
     let mut output_actions = Vec::new();
     let mut output_commitments = Vec::new();
 
-    // Create recipient output only for normal transfers (not bridge deposits)
-    if !is_bridge_deposit {
-        let mut output_nonce = [0u8; 32];
-        rng.fill_bytes(&mut output_nonce);
+    // Always create recipient output (MPC vault for bridge, user for normal transfer)
+    let mut output_nonce = [0u8; 32];
+    rng.fill_bytes(&mut output_nonce);
 
-        // Use IVK bytes for recipient commitment calculation (Option 2)
-        let recipient_commitment = fr_from_bytes(&to_ivk_bytes);
-        // Use new_for_recipient - sender doesn't know recipient's SK
-        let output_note = Note::new_for_recipient(
-            to_ivk.clone().ok_or("Missing recipient IVK")?,
-            amount_minor_u128,
-            recipient_commitment,
-            output_nonce,
-        );
-        let output_commitment = output_note.commitment();
-        output_actions.push(OutputAction {
-            note: output_note.clone(),
-            enabled: true,
-        });
-        output_commitments.push(output_commitment);
-    }
+    // Use IVK bytes for recipient commitment calculation
+    let recipient_commitment = fr_from_bytes(&to_ivk_bytes);
+    // Use new_for_recipient - sender doesn't know recipient's SK
+    let output_note = Note::new_for_recipient(
+        to_ivk.clone(),
+        amount_minor_u128,
+        recipient_commitment,
+        output_nonce,
+    );
+    let output_commitment = output_note.commitment();
+    output_actions.push(OutputAction {
+        note: output_note.clone(),
+        enabled: true,
+    });
+    output_commitments.push(output_commitment);
 
     // Calculate actual change amount (minus prover tip if prover address available)
     let actual_change_amount = change_amount_u128;
@@ -1336,12 +1334,16 @@ pub async fn send_transaction(
         let mut ephemeral_secret = [0u8; 32];
         rng.fill_bytes(&mut ephemeral_secret);
 
-        // 3. Perform ECDH to derive shared secret
+        // 3. Derive ephemeral public key (G2 point) - needed by MPC node to perform ECDH
+        let ephemeral_pubkey_bytes = crate::bridge_crypto::derive_ephemeral_pubkey(&ephemeral_secret)
+            .map_err(|e| format!("Failed to derive ephemeral pubkey: {}", e))?;
+
+        // 4. Perform ECDH to derive shared secret
         let shared_secret = crate::bridge_crypto::ecdh_bn254(&ephemeral_secret, &bridge_pubkey)
             .map_err(|e| format!("ECDH failed: {}", e))?;
 
-        // 4. Prepare L2 message: l2_recipient (20 bytes) + amount (16 bytes)
-        let mut l2_message = Vec::new();
+        // 5. Prepare L2 message: l2_recipient (20 bytes) + amount (16 bytes, BIG ENDIAN)
+        let mut l2_message = Vec::with_capacity(36);
 
         // Parse L2 recipient (EVM address - 20 bytes)
         let l2_addr_bytes = if l2_recipient.starts_with("0x") {
@@ -1358,9 +1360,10 @@ pub async fn send_transaction(
         }
 
         l2_message.extend_from_slice(&l2_addr_bytes); // 20 bytes
-        l2_message.extend_from_slice(&amount_minor_u128.to_le_bytes()); // 16 bytes
+        // Protocol standard: amount must be Big Endian (consistent with praph-cli and node)
+        l2_message.extend_from_slice(&amount_minor_u128.to_be_bytes()); // 16 bytes
 
-        // 5. Encrypt with ChaCha20Poly1305 using shared secret
+        // 6. Encrypt with ChaCha20Poly1305 using shared secret
         use chacha20poly1305::{
             aead::{Aead, KeyInit},
             ChaCha20Poly1305, Nonce,
@@ -1371,18 +1374,30 @@ pub async fn send_transaction(
 
         let mut nonce_bytes = [0u8; 12];
         rng.fill_bytes(&mut nonce_bytes);
+        
+        // Defensive: ensure nonce is never all zeros (which would be interpreted as non-bridge message by node)
+        if nonce_bytes.iter().all(|&b| b == 0) {
+            nonce_bytes[0] = 1;
+        }
+
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
             .encrypt(nonce, l2_message.as_ref())
             .map_err(|e| format!("Encryption failed: {}", e))?;
 
-        // 6. Build final encrypted message: nonce (12) + ciphertext (36 + 16 tag)
-        let mut encrypted_msg = Vec::new();
-        encrypted_msg.extend_from_slice(&nonce_bytes);
-        encrypted_msg.extend_from_slice(&ciphertext);
+        // 7. Build final encrypted message structure:
+        // [0..12]   - Nonce
+        // [12..64]  - Ciphertext (36 plaintext + 16 Poly1305 tag = 52 bytes)
+        // [64..160] - Ephemeral Public Key (96 bytes compressed G2)
+        // [160..]   - Zero Padding
+        
+        let mut encrypted_msg = Vec::with_capacity(MAX_ENCRYPTED_MESSAGE_BYTES);
+        encrypted_msg.extend_from_slice(&nonce_bytes); // 12 bytes
+        encrypted_msg.extend_from_slice(&ciphertext); // 52 bytes
+        encrypted_msg.extend_from_slice(&ephemeral_pubkey_bytes); // 96 bytes
 
-        // Pad to MAX_ENCRYPTED_MESSAGE_BYTES
+        // Pad to MAX_ENCRYPTED_MESSAGE_BYTES (1024)
         encrypted_msg.resize(MAX_ENCRYPTED_MESSAGE_BYTES, 0);
 
         eprintln!(
@@ -1416,13 +1431,13 @@ pub async fn send_transaction(
     // Fee = (max(N_Spend, N_Output) * L1_base_fee) + prover_tip
     let l1_base_fee_per_action = 0.0001_f64; // PRAF per action
                                              // Prover tip value in PRAF (for display/logging fees)
-    let prover_tip_val = (prover_tip_amount as f64) / 10000.0;
+    let prover_tip_val = (prover_tip_amount as f64) / 1_000_000_000_000_000_000.0;
 
     let spend_count = spend_actions.iter().filter(|sa| sa.enabled).count() as f64;
     let output_count = output_actions.iter().filter(|oa| oa.enabled).count() as f64;
     let action_count = spend_count.max(output_count);
     let total_fee_praf = (action_count * l1_base_fee_per_action) + prover_tip_val;
-    let total_fee_minor = (total_fee_praf * 10_000.0) as u128; // Convert to minor units (u128 for tx_fee)
+    let _total_fee_minor = (total_fee_praf * 1_000_000_000_000_000_000.0) as u128; // Convert to minor units (u128 for tx_fee)
 
     let private_inputs = ClientPrivateInputs {
         spend_actions,
@@ -1579,85 +1594,15 @@ pub async fn send_transaction(
         "encrypted_l2_message": hex::encode(&final_public_inputs.encrypted_l2_message),
     });
 
-    // Memo encryption and outgoing transaction recording (skip for bridge deposits)
-    if !is_bridge_deposit {
-        let to_ivk_unwrapped = to_ivk.as_ref().ok_or("Missing recipient IVK")?;
-        let output_commitment_bytes = fr_to_bytes(&output_commitments[0]); // First output is recipient
-
-        let memo_text = params.memo.clone().unwrap_or_default();
-        let output_nonce = [0u8; 32]; // Get from output creation above
-        let memo_plaintext =
-            build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
-        let mut memo_nonce = [0u8; 12];
-        rng.fill_bytes(&mut memo_nonce);
-
-        // ECDH-based memo encryption using TransactionViewKey
-        // 1. Generate ephemeral secret for this transaction
-        let mut ephemeral_secret = [0u8; 32];
-        rng.fill_bytes(&mut ephemeral_secret);
-
-        // 2. Derive TransactionViewKey from ephemeral secret + recipient IVK
-        let tvk = TransactionViewKey::derive_sender(&ephemeral_secret, to_ivk_unwrapped);
-
-        // 3. Encrypt memo with TVK
-        let memo_ciphertext = encrypt_memo_v1(&memo_plaintext, tvk.shared_secret(), &memo_nonce)?;
-
-        // 4. Construct outgoing ciphertext for sender's recovery
-        // Format: nonce (32 bytes) + amount (16 bytes) + recipient_ivk (32 bytes)
-        let mut outgoing_plaintext = Vec::new();
-        let mut outgoing_nonce_bytes = [0u8; 32];
-        rng.fill_bytes(&mut outgoing_nonce_bytes);
-        outgoing_plaintext.extend_from_slice(&outgoing_nonce_bytes); // 32 bytes: nonce
-        let amount_bytes = amount_minor_u128.to_le_bytes();
-        outgoing_plaintext.extend_from_slice(&amount_bytes); // 16 bytes: amount
-        outgoing_plaintext.extend_from_slice(&to_ivk_bytes); // 32 bytes: recipient IVK (used as fingerprint)
-
-        let outgoing_tvk =
-            TransactionViewKey::derive_sender(&outgoing_nonce_bytes, sender_fvk.incoming());
-        let mut outgoing_memo_nonce = [0u8; 12];
-        rng.fill_bytes(&mut outgoing_memo_nonce);
-        let outgoing_ciphertext = encrypt_memo_v1(
-            &outgoing_plaintext,
-            outgoing_tvk.shared_secret(),
-            &outgoing_memo_nonce,
-        )?;
-
-        // Store outgoing transaction with full note data for sender recovery
-        let outgoing_str = serde_json::json!({
-            "commitment_index": "pending",
-            "note_commitment": hex::encode(output_commitment_bytes),
-            "fingerprint": hex::encode(&to_ivk_bytes), // IVK bytes as fingerprint
-            "encrypted_memo": hex::encode(&memo_ciphertext),
-            "ephemeral_public": hex::encode(tvk.ephemeral_public()),
-            "outgoing_ciphertext": hex::encode(&outgoing_ciphertext),
-            "amount_minor": amount_minor_u128,
-        })
-        .to_string();
-
-        let fee_str = format!(
-            "{:.4} PRAF",
-            prover_tip_amount as f64 / 1_000_000_000_000_000_000.0
-        );
-        db::insert_outgoing(
-            &db,
-            tx_id.clone(),
-            active_account_index,
-            amount_display.clone(),
-            fee_str,
-            params.memo.clone(),
-            "pending",
-            Some(vec![outgoing_str]),
-            None,
-        )?;
-    }
-
+    // Memo encryption and outgoing transaction recording
     let mut output_memos_json = Vec::new();
-    if !is_bridge_deposit {
+    // ALWAYS create memo for recipient (even for bridge deposits - the MPC vault needs it to find the note)
+    {
+        let to_ivk_unwrapped = &to_ivk;
         let output_commitment_bytes = fr_to_bytes(&output_commitments[0]); // First output is recipient
-        let to_ivk_unwrapped = to_ivk.as_ref().ok_or("Missing recipient IVK")?;
 
         let memo_text = params.memo.clone().unwrap_or_default();
-        let output_nonce = [0u8; 32]; // Get from output creation above
+
         let memo_plaintext =
             build_v1_plaintext(&output_nonce, amount_minor_u128, memo_text.as_bytes());
         let mut memo_nonce = [0u8; 12];
@@ -1706,7 +1651,7 @@ pub async fn send_transaction(
             "sender_fingerprint": hex::encode(sender_fvk.fingerprint()),
             "outgoing_ciphertext": hex::encode(&outgoing_ciphertext),
         }));
-    }
+    } // End of scope for recipient memo
 
     if let Some((change_note, change_commitment_bytes)) = &change_note_opt {
         let change_plaintext =
@@ -1943,16 +1888,30 @@ pub async fn bridge_deposit(
     eprintln!("📊 L2 Address: {}", params.l2_address);
     eprintln!("💰 Amount: {}", params.amount);
 
-    // Bridge deposit is a send_transaction with l2_recipient set
+    // Query MPC vault address from L1 RPC
+    let l1_rpc_url = db::get_l1_rpc_url(&db)?;
+    eprintln!("🔗 Querying MPC vault address from L1: {}", l1_rpc_url);
+    
+    let rpc_client = crate::rpc_client::L1RpcClient::new(&l1_rpc_url)
+        .map_err(|e| format!("Failed to create RPC client: {}", e))?;
+    
+    let mpc_vault_address = rpc_client
+        .query_mpc_vault_address()
+        .await
+        .map_err(|e| format!("Failed to query MPC vault address: {}", e))?;
+    
+    eprintln!("✅ MPC Vault Address retrieved: {}", mpc_vault_address);
+
+    // Bridge deposit is a send_transaction with l2_recipient set and vault as recipient
     let send_params = SendParams {
-        to: String::new(), // Dummy - will create change output only
+        to: mpc_vault_address, // Send to MPC vault (dynamically queried from L1)
         amount: params.amount,
         memo: params.memo,
         prover_tip: params.prover_tip,
         l2_recipient: Some(params.l2_address),
     };
 
-    eprintln!("📤 Calling send_transaction...");
+    eprintln!("📤 Calling send_transaction to MPC vault...");
     let result = send_transaction(app, wallet, db, send_params).await;
 
     match &result {
@@ -1992,11 +1951,11 @@ pub async fn mint_dev_faucet(
     } else {
         format!("{} PRAF", params.amount)
     };
-    let amount_minor_i64 = parse_amount_minor(&amount_display);
-    if amount_minor_i64 <= 0 {
+    let amount_minor = parse_amount_minor(&amount_display);
+    if amount_minor == 0 {
         return Err("amount must be positive".to_string());
     }
-    let amount_minor_u128 = amount_minor_i64 as u128;
+    let amount_minor_u128 = amount_minor;
 
     let active_account_index = db::get_active_account_index(&db)?;
     let spending_key_bytes = wallet.spending_key_bytes_for_index(active_account_index)?;
@@ -2022,6 +1981,7 @@ pub async fn mint_dev_faucet(
     let to_ivk = to_fvk.incoming();
     let to_ivk_bytes = *to_ivk.as_bytes();
     let recipient_commitment = fr_from_bytes(&to_ivk_bytes);
+    
     // Minting to self - we know our own SK, so use Note::new
     let output_note = Note::new(
         to_sk,
@@ -2740,6 +2700,54 @@ pub async fn send_l2_transaction(
     })
 }
 
+/// Withdraw assets from L2 to L1 via Bridge
+#[tauri::command]
+pub async fn bridge_withdraw(
+    wallet: tauri::State<'_, WalletState>,
+    db: tauri::State<'_, DbState>,
+    params: BridgeWithdrawParams,
+) -> Result<BridgeWithdrawResult, String> {
+    eprintln!("🌉 ========== BRIDGE_WITHDRAW CALLED ==========");
+    let active = db::get_active_account_index(&db)?;
+    eprintln!("🌉 [DEBUG] Active account index: {}", active);
+    
+    let private_key = wallet.derive_eth_key(active)?;
+    eprintln!("🌉 [DEBUG] ETH key derived");
+
+    let l2_rpc_url =
+        db::get_l2_rpc_url(&db).unwrap_or_else(|_| "http://localhost:8545".to_string());
+    eprintln!("🌉 [DEBUG] L2 RPC URL: {}", l2_rpc_url);
+    
+    // Use deterministic bridge address if not set in DB
+    let bridge_address = db::get_bridge_address(&db)
+        .ok()
+        .or_else(|| Some("0x5FbDB2315678afecb367f032d93F642f64180aa3".to_string()));
+    eprintln!("🌉 [DEBUG] Bridge Address: {:?}", bridge_address);
+
+    let config = crate::l2_client::L2Config {
+        rpc_url: l2_rpc_url,
+        bridge_address,
+        chain_id: 1337,
+    };
+
+    let client = crate::l2_client::L2Client::new(config)?;
+    eprintln!("🌉 [DEBUG] L2 Client created");
+
+    // Parse SS58 L1 Recipient
+    let l1_bytes = parse_recipient_32(&params.l1_recipient)?;
+    eprintln!("🌉 [DEBUG] L1 Recipient Parsed: {:?}", hex::encode(l1_bytes));
+
+    eprintln!("🌉 [DEBUG] Calling client.withdraw_bridge...");
+    let result = client
+        .withdraw_bridge(l1_bytes, params.amount, params.prover_tip, &private_key)
+        .await?;
+    eprintln!("🌉 [DEBUG] client.withdraw_bridge returned: {:?}", result);
+
+    Ok(BridgeWithdrawResult {
+        tx_id: result.tx_hash,
+    })
+}
+
 /// Get L2 configuration
 #[tauri::command]
 pub fn get_l2_config(db: tauri::State<'_, DbState>) -> Result<L2Config, String> {
@@ -2781,9 +2789,9 @@ pub async fn get_fee_estimates() -> Result<crate::types::FeeEstimates, String> {
 
     // 2. Default fallback
     let default_estimates = crate::types::FeeEstimates {
-        base_fee: 1,
-        min_tip_per_action: 1,
-        average_tip: 5,
+        base_fee: 100_000_000_000_000,
+        min_tip_per_action: 100_000_000_000_000,
+        average_tip: 500_000_000_000_000,
     };
 
     // 3. Fetch

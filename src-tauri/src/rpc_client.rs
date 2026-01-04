@@ -1,8 +1,6 @@
 use jsonrpsee::core::client::ClientT;
-use jsonrpsee::core::params::ArrayParams;
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use jsonrpsee::rpc_params;
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// RPC client for querying L1 runtime APIs
@@ -69,6 +67,52 @@ impl L1RpcClient {
         }
 
         Ok(pubkey_bytes)
+    }
+
+    /// Query the MPC vault address for bridge deposits from L1 storage
+    ///
+    /// Returns the AccountId (SS58 address) where users should send funds for L1->L2 deposits.
+    /// This address is controlled by the MPC committee via threshold signatures.
+    pub async fn query_mpc_vault_address(&self) -> Result<String, String> {
+        // Use state_call RPC to query MpcBridgeApi::mpc_vault_address
+        let response: serde_json::Value = self
+            .client
+            .request("state_call", rpc_params!["MpcBridgeApi_mpc_vault_address", "0x"])
+            .await
+            .map_err(|e| format!("RPC call failed: {}", e))?;
+
+        // Response is SCALE-encoded Option<AccountId>
+        // For None: "0x00"
+        // For Some(AccountId): "0x01" + 32 bytes (AccountId32)
+        let result_hex = response
+            .as_str()
+            .ok_or_else(|| format!("Invalid response format: expected hex string, got {}", response))?;
+
+        let result_bytes = hex::decode(result_hex.trim_start_matches("0x"))
+            .map_err(|e| format!("Failed to decode response: {}", e))?;
+
+        // Check if None (first byte is 0x00)
+        if result_bytes.is_empty() || result_bytes[0] == 0x00 {
+            return Err("MPC vault address not set in chain state. Please configure via genesis or set_mpc_vault_address extrinsic.".to_string());
+        }
+
+        // Some(AccountId): first byte is 0x01, followed by 32-byte AccountId
+        if result_bytes.len() != 33 {
+            return Err(format!(
+                "Invalid SCALE-encoded Option<AccountId>: expected 33 bytes (0x01 + 32), got {}",
+                result_bytes.len()
+            ));
+        }
+
+        // Extract AccountId (32 bytes starting from index 1)
+        let account_bytes = &result_bytes[1..33];
+        
+        // Convert to SS58 address (Substrate format)
+        use sp_core::crypto::{AccountId32, Ss58Codec};
+        let account_id = AccountId32::new(account_bytes.try_into().unwrap());
+        let ss58_address = account_id.to_ss58check();
+
+        Ok(ss58_address)
     }
 }
 

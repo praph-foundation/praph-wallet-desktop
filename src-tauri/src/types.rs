@@ -234,6 +234,20 @@ pub struct L2AddressResult {
     pub l2_address: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeWithdrawParams {
+    pub amount: String,
+    pub l1_recipient: String, // SS58 address string
+    pub prover_tip: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeWithdrawResult {
+    pub tx_id: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FeeEstimates {
     pub base_fee: u128,

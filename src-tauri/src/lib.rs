@@ -90,6 +90,7 @@ pub fn run() {
             commands::send_transaction,
             commands::mint_dev_faucet,
             commands::bridge_deposit,
+            commands::bridge_withdraw,
             commands::generate_address,
             commands::get_accounts_state,
             commands::create_account,

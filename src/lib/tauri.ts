@@ -68,6 +68,16 @@ export interface BridgeDepositResult {
   txId: string;
 }
 
+export interface BridgeWithdrawParams {
+  amount: string;
+  l1Recipient: string;
+  proverTip: string;
+}
+
+export interface BridgeWithdrawResult {
+  txId: string;
+}
+
 export interface ActionCountEstimate {
   spendCount: number;
   outputCount: number;
@@ -228,6 +238,7 @@ interface WalletApi {
   sendTransaction: (params: SendParams) => Promise<SendResult>;
   mintDevFaucet: (params: MintDevFaucetParams) => Promise<MintDevFaucetResult>;
   bridgeDeposit: (params: BridgeDepositParams) => Promise<BridgeDepositResult>;
+  bridgeWithdraw: (params: BridgeWithdrawParams) => Promise<BridgeWithdrawResult>;
   updateBridgeStatus: (txId: string) => Promise<string>;
   generateAddress: () => Promise<AddressResult>;
   getAccountsState: () => Promise<AccountsState>;
@@ -285,6 +296,8 @@ const tauriApi: WalletApi = {
     invokeSafe<MintDevFaucetResult>("mint_dev_faucet", { params }),
   bridgeDeposit: (params: BridgeDepositParams) =>
     invokeSafe<BridgeDepositResult>("bridge_deposit", { params }),
+  bridgeWithdraw: (params: BridgeWithdrawParams) =>
+    invokeSafe<BridgeWithdrawResult>("bridge_withdraw", { params }),
   updateBridgeStatus: (txId: string) =>
     invoke<string>("update_bridge_status", { txId }),
 
@@ -501,6 +514,13 @@ const mockApi: WalletApi = {
     await sleep(100);
     throw new Error(
       "bridgeDeposit is only available in the Tauri desktop app (backend required)"
+    );
+  },
+
+  bridgeWithdraw: async (_params: BridgeWithdrawParams): Promise<BridgeWithdrawResult> => {
+    await sleep(100);
+    throw new Error(
+      "bridgeWithdraw is only available in the Tauri desktop app (backend required)"
     );
   },
 

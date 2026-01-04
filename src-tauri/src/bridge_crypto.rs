@@ -42,6 +42,34 @@ pub fn ecdh_bn254(ephemeral_secret: &[u8; 32], bridge_pubkey: &[u8]) -> Result<[
     Ok(shared_secret)
 }
 
+/// Derive ephemeral public key (G2 point) from ephemeral secret.
+pub fn derive_ephemeral_pubkey(ephemeral_secret: &[u8; 32]) -> Result<[u8; 96], String> {
+    use ark_ec::Group;
+    
+    // 1. Parse ephemeral secret as scalar
+    let scalar = Fr::from_le_bytes_mod_order(ephemeral_secret);
+
+    // 2. Compute ephemeral public key: P = scalar * G2_generator
+    let point = (G2Projective::generator() * scalar).into_affine();
+
+    // 3. Serialize as compressed G2 point (96 bytes)
+    let mut bytes = Vec::new();
+    point
+        .serialize_compressed(&mut bytes)
+        .map_err(|e| format!("Failed to serialize ephemeral pubkey: {}", e))?;
+
+    if bytes.len() != 96 {
+        return Err(format!(
+            "Invalid serialized G2 point length: expected 96, got {}",
+            bytes.len()
+        ));
+    }
+
+    let mut out = [0u8; 96];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
 /// Parse G2 point from bytes (supports both compressed and uncompressed formats)
 fn parse_g2_point(bytes: &[u8]) -> Result<G2Affine, String> {
     match bytes.len() {

@@ -184,6 +184,106 @@ impl L2Client {
         }
     }
 
+    /// Withdraw assets from L2 to L1 via Bridge
+    pub async fn withdraw_bridge(
+        &self,
+        l1_recipient: [u8; 32],
+        amount: String,
+        prover_tip: String,
+        private_key: &[u8; 32],
+    ) -> Result<L2SendResult, String> {
+        let wallet = LocalWallet::from_bytes(private_key)
+            .map_err(|e| format!("Invalid private key: {}", e))?
+            .with_chain_id(self.config.chain_id);
+        
+        let sender_addr = wallet.address();
+        let client = Arc::new(SignerMiddleware::new(self.provider.clone(), wallet));
+
+        let bridge_addr: Address = self
+            .config
+            .bridge_address
+            .as_ref()
+            .ok_or("Bridge address not configured")?
+            .parse()
+            .map_err(|e| format!("Invalid bridge address: {}", e))?;
+
+        // Parse amounts
+        let amount_wei = parse_units(&amount, 18).map_err(|e| format!("Invalid amount: {}", e))?;
+        // Prover tip is already in weis (usually), but let's assume input is human readable if string? 
+        // usage in frontend: "20" (minor units?). No, looking at Bridge.tsx, it passes "20" which is minor units * 10000? 
+        // actually in wallet send params it uses string for tip.
+        // Let's assume input `prover_tip` is in **PRAF** (human readable) or **Wei**?
+        // In the E2E script `PROVER_TIP` is 20 wei.
+        // In `commands.rs`, `prover_tip` is parsed as `params.prover_tip.parse().unwrap_or(0)` (u128) then cast to i64?
+        // Wait, `commands.rs` line 1083: `let prover_tip_amount: u128 = params.prover_tip.parse().unwrap_or(0);`
+        // And `Bridge.tsx` sets it to "20". 
+        // This likely means 20 *units*. In `commands.rs`, `amount_minor` allows decimals. `prover_tip_amount` seems to be raw integer.
+        // If `Bridge.tsx` passes "20", and `commands.rs` uses it as `u128`, it's likely minor units (if standard) or just raw wei?
+        // Step 39 `commands.rs`: `let prover_tip_val = (prover_tip_amount as f64) / 10000.0;`
+        // So `prover_tip` string "20" means 0.0020 PRAF? 
+        // The E2E script uses 20 wei.
+        // To be safe and consistent with `commands.rs` (L1), let's assume the string passed here IS the tip in WEI or Minor Units?
+        // But this is L2. L2 uses 18 decimals.
+        // The frontend `Bridge.tsx` seems to send "20" or calculated strings like "20000".
+        // Let's assume `prover_tip` passed to this function is in **WEI** (string decimal).
+        // Or should I follow `amount` and parse it from ETH units?
+        // The user prompt says: "Encode tip -> [u8; 32] (Big Endian U256)".
+        // It's safer to assume `prover_tip` string is strictly numeric string of WEI (18 decimals).
+        // However, looking at `Bridge.tsx`, `proverTip` is set to values like `feeOptions.standard.total` which comes from `getFeeEstimates`.
+        // `getFeeEstimates` returns `u128` (minor units?).
+        // In L1, 1 PRAF = 10000 units.
+        // In L2, 1 PRAF = 10^18 units.
+        // We probably want to pass the value in WEI.
+        // Let's parse it as U256 directly (integer string).
+        let tip_wei = U256::from_dec_str(&prover_tip)
+            .map_err(|e| format!("Invalid prover tip (wei): {}", e))?;
+        
+        // _totalAmount = amount + tip
+        let total_amount = amount_wei + tip_wei;
+
+        // Construct Payload: l1_recipient (32) + tip (32)
+        let mut payload = Vec::with_capacity(64);
+        payload.extend_from_slice(&l1_recipient);
+        
+        let mut tip_bytes = [0u8; 32];
+        tip_wei.to_big_endian(&mut tip_bytes);
+        payload.extend_from_slice(&tip_bytes);
+        
+        let bytes_payload = Bytes::from(payload);
+
+        // Define contract
+        abigen!(
+            BridgeContract,
+            r#"[
+                function withdraw(bytes memory _encryptedData, uint256 _totalAmount) external
+            ]"#
+        );
+
+        let contract = BridgeContract::new(bridge_addr, client);
+        
+        // Check L2 native balance before sending
+        let balance_u256 = self.provider.get_balance(sender_addr, None).await
+            .map_err(|e| format!("Failed to check balance: {}", e))?;
+        
+        if balance_u256 < total_amount {
+             return Err(format!(
+                 "Insufficient L2 balance: Have {}, Need {}", 
+                 format_units(balance_u256, 18), 
+                 format_units(total_amount, 18)
+             ));
+        }
+
+        let call = contract.withdraw(bytes_payload, total_amount);
+        let pending_tx = call.send().await
+            .map_err(|e| format!("Failed to send withdrawal: {}", e))?;
+            
+        Ok(L2SendResult {
+            tx_hash: format!("{:?}", pending_tx.tx_hash()),
+            block_number: None,
+            status: "pending".to_string(),
+        })
+    }
+
     /// Get the configured L2 config
     pub fn config(&self) -> &L2Config {
         &self.config
