@@ -25,26 +25,26 @@ export default function LayerTabs({ className = "" }: LayerTabsProps) {
             <button
                 type="button"
                 onClick={() => handleLayerChange("l1")}
-                className={`flex-1 px-4 py-2 text-sm font-semibold rounded-lg transition-all ${activeLayer === "l1"
-                    ? "bg-background text-foreground shadow-md"
+                className={`flex-1 px-4 py-1 text-xl font-semibold rounded-lg transition-all ${activeLayer === "l1"
+                    ? "bg-emerald-600 text-white shadow-md"
                     : "text-muted-foreground hover:text-foreground hover:bg-background/50"
                     }`}
             >
                 <span className="flex items-center justify-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className={`w-2 h-2 rounded-full ${activeLayer === "l1" ? "bg-white" : "bg-emerald-500"}`} />
                     L1 Assets
                 </span>
             </button>
             <button
                 type="button"
                 onClick={() => handleLayerChange("l2")}
-                className={`flex-1 px-4 py-2 text-sm font-semibold rounded-lg transition-all ${activeLayer === "l2"
-                    ? "bg-background text-foreground shadow-md"
+                className={`flex-1 px-4 py-1 text-xl font-semibold rounded-lg transition-all ${activeLayer === "l2"
+                    ? "bg-purple-600 text-white shadow-md"
                     : "text-muted-foreground hover:text-foreground hover:bg-background/50"
                     }`}
             >
                 <span className="flex items-center justify-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-purple-500" />
+                    <span className={`w-2 h-2 rounded-full ${activeLayer === "l2" ? "bg-white" : "bg-purple-500"}`} />
                     L2 EVM
                 </span>
             </button>

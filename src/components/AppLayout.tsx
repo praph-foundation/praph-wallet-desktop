@@ -4,7 +4,7 @@ import { api } from "../lib/tauri";
 import { Button } from "./ui/button";
 import { useWalletStore } from "../state/walletStore";
 import LayerTabs from "./LayerTabs";
-import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus, ChevronDown, Check, Pencil, LogOut } from "lucide-react";
+import { LayoutDashboard, Send, ArrowLeftRight, Download, Settings, Plus, Check, Pencil, LogOut, Lock, ChevronDown } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -122,7 +122,6 @@ export default function AppLayout() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newAccountName, setNewAccountName] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
-  const [l2Address, setL2Address] = useState<string | null>(null);
 
   useEffect(() => {
     if (lockState !== "unlocked") return;
@@ -132,12 +131,6 @@ export default function AppLayout() {
       .catch(() => { });
   }, [lockState, setAccountsState]);
 
-  // Fetch L2 address when on L2 layer
-  useEffect(() => {
-    if (activeLayer === "l2") {
-      api.getL2Balance().then((b) => setL2Address(b.address)).catch(() => { });
-    }
-  }, [activeLayer, activeAccountIndex]);
 
   // Layer-specific navigation items
   const l1NavItems = [
@@ -160,31 +153,120 @@ export default function AppLayout() {
   return (
     <div className="h-full bg-background text-foreground">
       <div className="flex h-full">
-        <aside className="w-72 border-r border-border p-4 flex flex-col">
-          <div className="mb-4">
-            <div className="text-base font-semibold">Praph Wallet</div>
-            <div className="text-xs text-muted-foreground">Official Desktop Wallet</div>
+        <aside className="w-20 border-r border-border py-4 flex flex-col items-center transition-all duration-300">
+          <div className="mb-6 flex justify-center">
+            <div className="h-10 w-10 rounded-xl bg-primary text-primary-foreground flex items-center justify-center font-bold text-xl shadow-lg">
+              P
+            </div>
           </div>
 
-          {/* Layer Tabs */}
-          <LayerTabs className="mb-4" />
 
-          {/* Account Picker */}
-          <div className="mb-4 rounded-md border border-border bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">
-              {activeLayer === "l1" ? "L1 Account" : "L2 Account"}
-            </div>
-            <div className="mt-2 flex items-center gap-2">
+
+
+          {/* Navigation */}
+          <nav className="flex-1 w-full flex flex-col items-center gap-4">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/l1" || item.to === "/l2"}
+                className={({ isActive }) =>
+                  [
+                    "group relative flex items-center justify-center h-12 w-12 rounded-2xl transition-all duration-300 ease-out hover:scale-150 hover:shadow-xl hover:z-50",
+                    isActive
+                      ? `bg-${layerColor}-500 text-white shadow-lg scale-110`
+                      : `text-muted-foreground hover:bg-${layerColor}-100 dark:hover:bg-muted hover:text-foreground bg-transparent`,
+                  ].join(" ")
+                }
+              >
+                {() => (
+                  <>
+                    <item.icon className="h-6 w-6" />
+                    {/* Tooltip Label */}
+                    <span className="absolute left-full ml-4 px-3 py-1.5 bg-foreground text-background text-sm font-semibold rounded-lg opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 whitespace-nowrap shadow-lg pointer-events-none z-50">
+                      {item.label}
+                    </span>
+                  </>
+                )}
+              </NavLink>
+            ))}
+
+            <div className="my-2 h-px w-8 bg-border" />
+
+
+          </nav>
+
+          {/* Footer */}
+          <div className="mt-auto flex flex-col items-center gap-4 pb-4 w-full">
+            <button
+              className="group relative flex items-center justify-center h-10 w-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted hover:scale-150 hover:shadow-xl hover:z-50 transition-all duration-300 ease-out"
+              onClick={() => {
+                lock();
+                navigate("/unlock");
+              }}
+            >
+              <Lock className="h-5 w-5" />
+              <span className="absolute left-full ml-4 px-3 py-1.5 bg-foreground text-background text-sm font-semibold rounded-lg opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 whitespace-nowrap shadow-lg pointer-events-none z-50">
+                Lock Wallet
+              </span>
+            </button>
+            <button
+              className="group relative flex items-center justify-center h-10 w-10 rounded-xl text-destructive hover:text-destructive hover:bg-destructive/10 hover:scale-150 hover:shadow-xl hover:z-50 transition-all duration-300 ease-out"
+              onClick={() => {
+                // Clear wallet state to force onboarding
+                const setHasWallet = useWalletStore.getState().setHasWallet;
+                setHasWallet(false);
+                lock();
+                navigate("/onboarding");
+              }}
+            >
+              <LogOut className="h-5 w-5" />
+              <span className="absolute left-full ml-4 px-3 py-1.5 bg-destructive text-destructive-foreground text-sm font-semibold rounded-lg opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 whitespace-nowrap shadow-lg pointer-events-none z-50">
+                Logout
+              </span>
+            </button>
+
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                [
+                  "group relative flex items-center justify-center h-12 w-12 rounded-2xl transition-all duration-300 ease-out hover:scale-150 hover:shadow-xl hover:z-50",
+                  isActive
+                    ? "bg-primary text-primary-foreground shadow-lg scale-110"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground bg-transparent",
+                ].join(" ")
+              }
+            >
+              {() => (
+                <>
+                  <Settings className="h-6 w-6" />
+                  <span className="absolute left-full ml-4 px-3 py-1.5 bg-foreground text-background text-sm font-semibold rounded-lg opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 whitespace-nowrap shadow-lg pointer-events-none z-50">
+                    Settings
+                  </span>
+                </>
+              )}
+            </NavLink>
+          </div>
+        </aside>
+
+        <main className="flex-1 overflow-auto p-6">
+          <div className="relative mb-6">
+            <div className="absolute left-0 top-0 z-10 flex items-center gap-4">
               <Dialog open={accountPickerOpen} onOpenChange={setAccountPickerOpen}>
                 <DialogTrigger asChild>
                   <button
                     type="button"
-                    className="flex h-9 flex-1 items-center justify-between rounded-md border border-input bg-background px-3 text-sm shadow-sm hover:bg-muted/40"
+                    className="group relative flex h-10 items-center justify-between gap-2 rounded-xl border border-input bg-background px-4 py-2 shadow-sm transition-all duration-300 hover:bg-muted/40 hover:scale-105 active:scale-95"
                   >
-                    <span className="truncate">
-                      {accounts.find((a) => a.index === activeAccountIndex)?.name ?? "Account 1"}
-                    </span>
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    <div className="flex items-center gap-2">
+                      <div className="h-6 w-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold">
+                        {accounts.find((a) => a.index === activeAccountIndex)?.name?.charAt(0).toUpperCase() ?? "A"}
+                      </div>
+                      <span className="font-medium text-sm">
+                        {accounts.find((a) => a.index === activeAccountIndex)?.name ?? "Account 1"}
+                      </span>
+                    </div>
+                    <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-hover:rotate-180" />
                   </button>
                 </DialogTrigger>
                 <DialogContent>
@@ -195,7 +277,7 @@ export default function AppLayout() {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-1">
-                    {(accounts.length ? accounts : [{ index: 0, name: "Account 1", address: "", isActive: true }]).map(
+                    {(accounts.length ? accounts : [{ index: 0, name: "Account 1", address: "", zkAddress: "", isActive: true }]).map(
                       (a) => (
                         <AccountItem
                           key={a.index}
@@ -214,9 +296,12 @@ export default function AppLayout() {
 
               <Dialog open={createOpen} onOpenChange={setCreateOpen}>
                 <DialogTrigger asChild>
-                  <Button size="sm" variant="outline" title="Create new account">
-                    <Plus className="h-4 w-4" />
-                  </Button>
+                  <button className="group relative h-10 w-10 flex items-center justify-center rounded-xl border border-input bg-background shadow-sm hover:bg-muted/40 transition-all duration-300 hover:scale-125 hover:shadow-md" title="Create new account">
+                    <Plus className="h-5 w-5" />
+                    <span className="absolute top-full mt-2 px-3 py-1.5 bg-foreground text-background text-sm font-semibold rounded-lg opacity-0 -translate-y-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-y-0 whitespace-nowrap shadow-lg pointer-events-none z-50">
+                      Create Account
+                    </span>
+                  </button>
                 </DialogTrigger>
                 <DialogContent>
                   <DialogHeader>
@@ -260,95 +345,11 @@ export default function AppLayout() {
                 </DialogContent>
               </Dialog>
             </div>
-            {/* Address display - shows L1 or L2 address based on layer */}
-            <div className="mt-2 break-all font-mono text-[11px] text-muted-foreground">
-              {activeLayer === "l1"
-                ? (accounts.find((a) => a.index === activeAccountIndex)?.address ?? "")
-                : (l2Address ?? "Loading...")}
+
+            <div className="max-w-xs mx-auto">
+              <LayerTabs />
             </div>
           </div>
-
-          {/* Navigation */}
-          <nav className="space-y-1 flex-1">
-            {navItems.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === "/l1" || item.to === "/l2"}
-                className={({ isActive }) =>
-                  [
-                    "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                    isActive
-                      ? `bg-${layerColor}-500/10 text-foreground`
-                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                  ].join(" ")
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    <span
-                      className={
-                        `absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-${layerColor}-500 ` +
-                        (isActive ? "opacity-100" : "opacity-0")
-                      }
-                    />
-                    <item.icon className="h-4 w-4" />
-                    <span className="flex-1">{item.label}</span>
-                  </>
-                )}
-              </NavLink>
-            ))}
-
-            {/* Settings (shared) */}
-            <NavLink
-              to="/settings"
-              className={({ isActive }) =>
-                [
-                  "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-foreground"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                ].join(" ")
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    className={
-                      "absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary " +
-                      (isActive ? "opacity-100" : "opacity-0")
-                    }
-                  />
-                  <Settings className="h-4 w-4" />
-                  <span className="flex-1">Settings</span>
-                </>
-              )}
-            </NavLink>
-          </nav>
-
-          {/* Footer */}
-          <div className="pt-4 border-t border-border mt-auto space-y-2">
-            <Button variant="ghost" className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-muted" onClick={() => {
-              lock();
-              navigate("/unlock");
-            }}>
-              <Settings className="h-4 w-4 mr-2" />
-              Lock Wallet
-            </Button>
-            <Button variant="ghost" className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => {
-              // Clear wallet state to force onboarding
-              const setHasWallet = useWalletStore.getState().setHasWallet;
-              setHasWallet(false);
-              lock();
-              navigate("/onboarding");
-            }}>
-              <LogOut className="h-4 w-4 mr-2" />
-              Logout
-            </Button>
-          </div>
-        </aside>
-
-        <main className="flex-1 overflow-auto p-6">
           <Outlet />
         </main>
       </div>
