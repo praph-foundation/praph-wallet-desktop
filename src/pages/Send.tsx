@@ -32,7 +32,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-const ONE_PRAF_UNITS = 10000;
+const ONE_PRAF_UNITS = BigInt(10) ** BigInt(18);
 
 export default function SendPage() {
   const qc = useQueryClient();
@@ -43,8 +43,7 @@ export default function SendPage() {
   const [memo, setMemo] = useState("");
 
   // ProverTip is now STRING (amount in minor units)
-  // We initialize with a safe default (e.g. 5 units * 4 actions = 20)
-  const [proverTip, setProverTip] = useState<string>("20");
+  const [proverTip, setProverTip] = useState<string>("200000000000000"); // 0.0002 PRAF initial
   const [selectedSpeed, setSelectedSpeed] = useState<"slow" | "standard" | "fast">("standard");
 
   const [progress, setProgress] = useState<ProgressStep>("idle");
@@ -86,17 +85,12 @@ export default function SendPage() {
   const feeOptions = useMemo(() => {
     if (!feeEstimates) return null;
 
-    // Logic: Actions * Rate * Multiplier
-    // Slow: Min * Actions
-    // Standard: Avg * Actions
-    // Fast: Avg * 1.5 * Actions
+    const minRate = BigInt(feeEstimates.min_tip_per_action);
+    const avgRate = BigInt(feeEstimates.average_tip);
 
-    const minRate = feeEstimates.min_tip_per_action;
-    const avgRate = feeEstimates.average_tip;
-
-    const slowTotal = minRate * actionCount;
-    const stdTotal = avgRate * actionCount;
-    const fastTotal = Math.ceil(avgRate * 1.5 * actionCount);
+    const slowTotal = minRate * BigInt(actionCount);
+    const stdTotal = avgRate * BigInt(actionCount);
+    const fastTotal = (avgRate * BigInt(15) / BigInt(10)) * BigInt(actionCount);
 
     return {
       slow: { total: slowTotal.toString(), label: "Slow", desc: `Economy (${actionCount} actions)` },
@@ -107,7 +101,7 @@ export default function SendPage() {
 
   // Set initial tip to standard when loaded
   useEffect(() => {
-    if (feeOptions && selectedSpeed === "standard" && proverTip === "20") { // Check if default
+    if (feeOptions && selectedSpeed === "standard") {
       setProverTip(feeOptions.standard.total);
     }
   }, [feeOptions]);
@@ -161,8 +155,12 @@ export default function SendPage() {
   const canSubmit = Boolean(to && amount && isValidAddress && isValidAmount && !loading);
 
   const formatPraf = (minor: string) => {
-    const val = parseInt(minor);
-    return (val / ONE_PRAF_UNITS).toFixed(4);
+    const val = BigInt(minor);
+    const whole = val / ONE_PRAF_UNITS;
+    const fraction = val % ONE_PRAF_UNITS;
+    // Format to 4-6 decimals for display readability
+    const fractionStr = fraction.toString().padStart(18, '0').slice(0, 6);
+    return `${whole}.${fractionStr}`;
   };
 
   return (
